@@ -1,0 +1,961 @@
+*&---------------------------------------------------------------------*
+*& Report  ZPP_COGI_ALV
+*& Subject: It allows user to Goods Issue (MB11) Or Goods Withdraw(MB1A)
+*&---------------------------------------------------------------------*
+
+REPORT  ZPP_COGI_ALV
+        MESSAGE-ID ZALV
+        NO STANDARD PAGE HEADING
+        LINE-SIZE 276
+        LINE-COUNT 65.
+
+
+
+*******Data Definition ********************
+TABLES: RESB.
+DATA: HTAB TYPE C VALUE CL_ABAP_CHAR_UTILITIES=>HORIZONTAL_TAB.
+
+****TODO: Your own global types and data section
+TYPES: BEGIN OF TY_GIITEM,
+         FLAG(1) TYPE C,
+         AUFNR   LIKE RESB-AUFNR, " Production Order
+         MATNR   LIKE RESB-MATNR, " Material
+         WERKS   LIKE RESB-WERKS, " Plant
+         LGORT   LIKE RESB-LGORT, " Storage Location
+         RSNUM   LIKE RESB-RSNUM, " Reservation Quantity
+         RSPOS   LIKE RESB-RSPOS, " Item Number of Reservation/Dependent Requirement
+         BDMNG   LIKE RESB-BDMNG, " Requirement Quantity
+         ENMNG   LIKE RESB-ENMNG, " Withdrawn Quantity
+         RNMNG   LIKE RESB-ENMNG. " Issue Quantity
+TYPES: END OF  TY_GIITEM.
+
+
+TYPES: TY_POPMESSAGE(200) TYPE C.
+TYPES: TY_GIITEMS TYPE STANDARD TABLE OF TY_GIITEM.
+TYPES: TY_HASHGIITEMS TYPE HASHED TABLE OF TY_GIITEM WITH UNIQUE KEY MATNR.
+DATA: ITAB_GIITEM         TYPE TY_GIITEMS,
+      WA_GIITEM           TYPE TY_GIITEM,
+      ITAB_SELECTEDGIITEM TYPE TY_HASHGIITEMS,
+      WA_SELECTEDGIITEM   TYPE TY_GIITEMS.
+CONSTANTS : C_CHECK(1) VALUE 'X'. " value used to set X for a field
+
+*************** Select Screen ***********************
+
+PARAMETERS: P_AUFNR LIKE RESB-AUFNR OBLIGATORY,
+            P_WERKS LIKE RESB-WERKS DEFAULT '4123' OBLIGATORY.
+
+* ALV Layout Variable.
+PARAMETERS: P_VARI LIKE DISVARIANT-VARIANT.
+
+*************** ALV Model and Controller class definition***************
+***** Controller ZCL_ALV_SERVICE class. No need to change the service class. Better to create it in the public pool via se24.
+CLASS ZCL_ALV_SERVICE DEFINITION.
+  "* public components of class ZCL_ALV_SERVICE
+  "* do not include other source files here!!!
+  PUBLIC SECTION.
+    DATA GR_ALV_TITLE(50) TYPE C .
+    DATA GC_CUSTOM_CONTROL_NAME TYPE SCRFNAME VALUE 'CC_ALV'. "#EC NOTEXT .
+    DATA GR_ALVGRID TYPE REF TO CL_GUI_ALV_GRID .
+    CLASS-METHODS GETVARIANT
+      IMPORTING
+        VALUE(SAVETYPE) TYPE C
+      CHANGING
+        !ES_VARIANT     TYPE SLIS_VARI .
+    METHODS CONSTRUCTOR
+      IMPORTING
+        VALUE(IN_ALV_TITLE)           TYPE C DEFAULT 'Report'
+        VALUE(IN_CUSTOM_CONTROL_NAME) TYPE SCRFNAME DEFAULT 'CC_ALV'
+          PREFERRED PARAMETER IN_ALV_TITLE .
+    METHODS DISPLAY_ALV
+      CHANGING
+        !GT_FIELDCAT TYPE LVC_T_FCAT
+        !GS_LAYOUT   TYPE LVC_S_LAYO
+        !GS_TAB      TYPE STANDARD TABLE
+        !GS_VARIANT  TYPE SLIS_VARI OPTIONAL .
+    METHODS FREE .
+    CLASS-METHODS CHECKVARIANT
+      IMPORTING
+        VALUE(SAVETYPE) TYPE C
+      CHANGING
+        !ES_VARIANT     TYPE SLIS_VARI .
+    METHODS CHECK_CHANGED_DATA .
+    METHODS REFRESH .
+    METHODS DATACHANGED .
+        METHODS POST_GOODSISSUE
+      IMPORTING
+        !ISISSUE       TYPE C
+        !SELECTEDITEMS TYPE TY_HASHGIITEMS.
+  PROTECTED SECTION.
+    DATA GR_CCONTAINER TYPE REF TO CL_GUI_CUSTOM_CONTAINER .
+    DATA ISFIRSTTIME TYPE C VALUE 'X'.                    "#EC NOTEXT .
+    "* private components of class ZCL_ALV_SERVICE
+    "* do not include other source files here!!!
+  PRIVATE SECTION.
+ENDCLASS.
+CLASS ZCL_ALV_SERVICE IMPLEMENTATION.
+  METHOD GETVARIANT.
+    DATA: I_VARIANT TYPE DISVARIANT,
+          E_VARIANT TYPE DISVARIANT.
+    DATA: LV_EXIT TYPE C.
+    I_VARIANT-REPORT = SY-CPROG.
+    CALL FUNCTION 'REUSE_ALV_VARIANT_F4'
+      EXPORTING
+        IS_VARIANT    = I_VARIANT
+        I_SAVE        = SAVETYPE
+*       i_tabname_header    =
+*       i_tabname_item      =
+*       it_default_fieldcat =
+      IMPORTING
+        E_EXIT        = LV_EXIT
+        ES_VARIANT    = E_VARIANT
+      EXCEPTIONS
+        NOT_FOUND     = 1
+        PROGRAM_ERROR = 2
+        OTHERS        = 3.
+    IF SY-SUBRC IS INITIAL.
+      IF LV_EXIT IS INITIAL.
+        ES_VARIANT = E_VARIANT-VARIANT.
+      ENDIF.
+    ELSE.
+      MESSAGE S205(0K).
+    ENDIF.
+  ENDMETHOD.
+
+  METHOD CONSTRUCTOR.
+    ME->GC_CUSTOM_CONTROL_NAME = IN_CUSTOM_CONTROL_NAME.
+    CREATE OBJECT GR_CCONTAINER
+      EXPORTING
+*       PARENT                      =
+        CONTAINER_NAME              = ME->GC_CUSTOM_CONTROL_NAME
+        STYLE                       = CL_GUI_CONTROL=>WS_MAXIMIZEBOX
+*       LIFETIME                    = lifetime_default
+*       REPID                       =
+*       DYNNR                       =
+*       NO_AUTODEF_PROGID_DYNNR     =
+      EXCEPTIONS
+        CNTL_ERROR                  = 1
+        CNTL_SYSTEM_ERROR           = 2
+        CREATE_ERROR                = 3
+        LIFETIME_ERROR              = 4
+        LIFETIME_DYNPRO_DYNPRO_LINK = 5
+        OTHERS                      = 6.
+*--- Exception handling
+    IF SY-SUBRC <> 0.
+      MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+                 WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+      EXIT.
+    ENDIF.
+*--- Creating ALV Grid instance
+    CREATE OBJECT GR_ALVGRID
+      EXPORTING
+*       I_SHELLSTYLE      = 0
+*       I_LIFETIME        =
+        I_PARENT          = GR_CCONTAINER
+*       I_APPL_EVENTS     = space
+*       I_PARENTDBG       =
+*       I_APPLOGPARENT    =
+*       I_GRAPHICSPARENT  =
+*       I_NAME            =
+*       I_FCAT_COMPLETE   = SPACE
+      EXCEPTIONS
+        ERROR_CNTL_CREATE = 1
+        ERROR_CNTL_INIT   = 2
+        ERROR_CNTL_LINK   = 3
+        ERROR_DP_CREATE   = 4
+        OTHERS            = 5.
+    IF SY-SUBRC <> 0.
+      MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+                 WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+      EXIT.
+    ENDIF.
+  ENDMETHOD.
+  METHOD DISPLAY_ALV.
+    DATA: I_VARIANT TYPE DISVARIANT.
+    I_VARIANT-REPORT = SY-CPROG.
+    I_VARIANT-VARIANT = GS_VARIANT.
+    IF ISFIRSTTIME EQ 'X'.
+*--- set first display
+      CALL METHOD GR_ALVGRID->SET_TABLE_FOR_FIRST_DISPLAY
+        EXPORTING
+*         I_BUFFER_ACTIVE =
+*         I_BYPASSING_BUFFER            =
+*         I_CONSISTENCY_CHECK           =
+*         I_STRUCTURE_NAME              =
+          IS_VARIANT      = I_VARIANT
+          I_SAVE          = 'A'
+*         I_DEFAULT       = 'X'
+          IS_LAYOUT       = GS_LAYOUT
+*         IS_PRINT        =
+*         IT_SPECIAL_GROUPS             =
+*         IT_TOOLBAR_EXCLUDING          =
+*         IT_HYPERLINK    =
+*         IT_ALV_GRAPHICS =
+*         IT_EXCEPT_QINFO =
+*         IR_SALV_ADAPTER =
+        CHANGING
+          IT_OUTTAB       = GS_TAB
+          IT_FIELDCATALOG = GT_FIELDCAT
+*         IT_SORT         =
+*         IT_FILTER       =
+*    EXCEPTIONS
+*         INVALID_PARAMETER_COMBINATION = 1
+*         PROGRAM_ERROR   = 2
+*         TOO_MANY_LINES  = 3
+*         others          = 4
+        .
+      IF SY-SUBRC <> 0.
+        MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+                 WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+      ENDIF.
+      ISFIRSTTIME = ' '.
+    ELSE.
+      CALL METHOD GR_ALVGRID->REFRESH_TABLE_DISPLAY
+*  EXPORTING
+*    IS_STABLE      =
+*    I_SOFT_REFRESH =
+*  EXCEPTIONS
+*    FINISHED       = 1
+*    others         = 2
+        .
+      IF SY-SUBRC <> 0.
+        MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+                 WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+      ENDIF.
+    ENDIF.
+  ENDMETHOD.
+  METHOD FREE.
+    CALL METHOD GR_ALVGRID->FREE
+      EXCEPTIONS
+        CNTL_ERROR        = 1
+        CNTL_SYSTEM_ERROR = 2
+        OTHERS            = 3.
+    IF SY-SUBRC <> 0.
+      MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+                 WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+    ENDIF.
+    CALL METHOD GR_CCONTAINER->FREE
+      EXCEPTIONS
+        CNTL_ERROR        = 1
+        CNTL_SYSTEM_ERROR = 2
+        OTHERS            = 3.
+    IF SY-SUBRC <> 0.
+      MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+                 WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+    ENDIF.
+  ENDMETHOD.
+  METHOD CHECKVARIANT.
+    DATA: C_VARIANT TYPE DISVARIANT.
+    IF NOT ES_VARIANT IS INITIAL.
+      MOVE: ES_VARIANT TO C_VARIANT-VARIANT,
+            SY-CPROG TO C_VARIANT-REPORT.
+      CALL FUNCTION 'REUSE_ALV_VARIANT_EXISTENCE'
+        EXPORTING
+          I_SAVE     = SAVETYPE
+        CHANGING
+          CS_VARIANT = C_VARIANT.
+*        exceptions
+*             wrong_input   = 1
+*             not_found     = 2
+*             program_error = 3
+*             others        = 4.
+    ENDIF.
+  ENDMETHOD.
+  METHOD CHECK_CHANGED_DATA.
+    CALL METHOD GR_ALVGRID->CHECK_CHANGED_DATA
+*  IMPORTING
+*    E_VALID   =
+*  CHANGING
+*    C_REFRESH = 'X'
+      .
+  ENDMETHOD.
+  METHOD REFRESH.
+    IF ISFIRSTTIME <> 'X'.
+      CALL METHOD GR_ALVGRID->REFRESH_TABLE_DISPLAY
+*  EXPORTING
+*    IS_STABLE      =
+*    I_SOFT_REFRESH =
+*  EXCEPTIONS
+*    FINISHED       = 1
+*    others         = 2
+        .
+      IF SY-SUBRC <> 0.
+        MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+                 WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+      ENDIF.
+    ENDIF.
+  ENDMETHOD.
+  METHOD DATACHANGED.
+    ISFIRSTTIME = 'X'.
+  ENDMETHOD.
+
+  METHOD POST_GOODSISSUE.
+    DATA: LT_HEADER  TYPE TABLE OF BAPI2017_GM_HEAD_01,
+          LT_HEADRET TYPE TABLE OF BAPI2017_GM_HEAD_RET,
+          LT_ITEM    TYPE TABLE OF BAPI2017_GM_ITEM_CREATE.
+    DATA: LS_ITEM    TYPE BAPI2017_GM_ITEM_CREATE,
+          LS_HEADRET TYPE BAPI2017_GM_HEAD_RET,
+          LS_HEADER  TYPE BAPI2017_GM_HEAD_01,
+          LS_GM_CODE TYPE BAPI2017_GM_CODE,
+          LV_GM_CODE TYPE GM_CODE,
+          LV_XSTOB   TYPE BAPI2017_GM_ITEM_CREATE-XSTOB. "Use Reversal Movement Type Indicator
+    DATA: LT_RETURN TYPE TABLE OF BAPIRET2,
+          LS_RETMTD TYPE BAPI2017_GM_HEAD_RET-MAT_DOC.
+    DATA: BAPISTATUS    TYPE I,
+          MESSAGE       TYPE TDVARLINE,
+          RESULTMESSAGE TYPE TDVARLINE.
+    DATA: POPMESSAGE(200) TYPE C,
+          ACTIONTYPE(20)  TYPE C.
+    DATA: X_ANS TYPE C.
+    POPMESSAGE = 'Are you ready to perform'.
+
+
+    IF ISISSUE = 'X'.
+      LV_GM_CODE = '06'. "MB11 Goods Issue
+      LV_XSTOB = 'X'.
+      ACTIONTYPE = 'Goods Issue'.
+    ELSE.
+      LV_GM_CODE = '03'. "MB1A Goods Withdraw
+      ACTIONTYPE = 'Goods Withdraw'.
+    ENDIF.
+    CONCATENATE POPMESSAGE ACTIONTYPE '?' INTO POPMESSAGE SEPARATED BY SPACE.
+    CALL FUNCTION 'POPUP_TO_CONFIRM'
+      EXPORTING
+        TITLEBAR              = 'Confirming Message '
+*       DIAGNOSE_OBJECT       = ' '
+        TEXT_QUESTION         = POPMESSAGE
+        TEXT_BUTTON_1         = 'Yes'
+        TEXT_BUTTON_2         = 'No'
+        DEFAULT_BUTTON        = '2'
+        DISPLAY_CANCEL_BUTTON = ''
+      IMPORTING
+        ANSWER                = X_ANS
+      EXCEPTIONS
+        TEXT_NOT_FOUND        = 1
+        OTHERS                = 2.
+
+    IF SY-SUBRC = 0.
+      CASE X_ANS.
+        WHEN '1'.
+          REFRESH: LT_HEADER, LT_HEADRET, LT_ITEM.
+          CLEAR: LS_ITEM, LS_HEADRET, LS_GM_CODE.
+          LS_HEADER-PSTNG_DATE = SY-DATUM.
+          LS_HEADER-DOC_DATE = SY-DATUM.
+          LS_GM_CODE-GM_CODE = LV_GM_CODE.
+
+          LOOP AT SELECTEDITEMS INTO DATA(ITEM).
+            LS_ITEM-MOVE_TYPE = '261'.
+            LS_ITEM-RESERV_NO = ITEM-RSNUM.
+            LS_ITEM-RES_ITEM = ITEM-RSPOS.
+            LS_ITEM-MATERIAL = ITEM-MATNR.
+            LS_ITEM-STGE_LOC = ITEM-LGORT.
+            LS_ITEM-ENTRY_QNT = ITEM-RNMNG.
+            LS_ITEM-ENTRY_UOM = 'EA'.
+            LS_ITEM-PLANT = ITEM-WERKS.
+            LS_ITEM-ORDERID = ITEM-AUFNR.
+            APPEND LS_ITEM TO LT_ITEM.
+            CLEAR: LS_ITEM.
+          ENDLOOP.
+
+          CALL FUNCTION 'BAPI_GOODSMVT_CREATE'
+            EXPORTING
+              GOODSMVT_HEADER  = LS_HEADER
+              GOODSMVT_CODE    = LS_GM_CODE
+            IMPORTING
+              GOODSMVT_HEADRET = LS_HEADRET
+              MATERIALDOCUMENT = LS_RETMTD
+            TABLES
+              GOODSMVT_ITEM    = LT_ITEM
+              RETURN           = LT_RETURN.
+
+          PERFORM HANDLE_BAPIRESULT
+                  TABLES
+                    LT_RETURN
+                  CHANGING
+                     BAPISTATUS
+                     MESSAGE.
+
+          IF LS_RETMTD <> ''. " successful
+*** Commit BAPI
+            CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+              EXPORTING
+                WAIT = ''.
+            IF SY-SUBRC = 0.
+              CONCATENATE 'Posting of ' ACTIONTYPE ' is successful. Doc#:' LS_RETMTD INTO RESULTMESSAGE SEPARATED BY SPACE.
+              MESSAGE I000 WITH RESULTMESSAGE.
+            ELSE.
+              CONCATENATE 'Posting of' ACTIONTYPE 'failed to commit. Please contact IT for help.' INTO RESULTMESSAGE SEPARATED BY SPACE.
+              MESSAGE I000 WITH RESULTMESSAGE.
+            ENDIF.
+          ELSE.
+            CONCATENATE 'Posting of' ACTIONTYPE 'failed;' INTO RESULTMESSAGE SEPARATED BY SPACE.
+            MESSAGE I000 WITH RESULTMESSAGE.
+            PERFORM DISPLAY_BAPIRESULT
+                        TABLES
+                           LT_RETURN
+                        USING
+                           ''.
+
+          ENDIF.
+
+        WHEN '2'.
+        WHEN OTHERS.
+      ENDCASE.
+
+    ENDIF. "IF SY-subrc = 0.
+  ENDMETHOD.
+ENDCLASS.
+
+***** Model ZCL_DATA Class Definition
+CLASS ZCL_DATA DEFINITION.
+  PUBLIC SECTION.
+*types:
+*** static method ***
+    CLASS-METHODS GET_GS_LAYOUT
+      IMPORTING
+        !GS_TITLE  TYPE C
+      CHANGING
+        !PS_LAYOUT TYPE LVC_S_LAYO .
+    METHODS GET_FIELDCAT
+      IMPORTING
+        !ISRESULT    TYPE C DEFAULT ' '
+      CHANGING
+        !PT_FIELDCAT TYPE LVC_T_FCAT .
+*** object level method ***
+*** imput validation
+    METHODS GETSELECTED
+      IMPORTING
+        !ITEMS         TYPE TY_GIITEMS
+      EXPORTING
+        !SELECTEDITEMS TYPE TY_HASHGIITEMS.
+
+
+*** data manipulating ***
+    METHODS GET_DATA.
+*** alv event handling *******
+    METHODS HANDLE_HOTSPOT_CLICK
+          FOR EVENT HOTSPOT_CLICK OF CL_GUI_ALV_GRID
+      IMPORTING
+          !E_ROW_ID
+          !E_COLUMN_ID
+          !ES_ROW_NO .
+    METHODS ON_DOUBLE_CLICK FOR EVENT DOUBLE_CLICK OF CL_GUI_ALV_GRID
+      IMPORTING E_ROW E_COLUMN ES_ROW_NO.
+ENDCLASS. "ZCL_DATA definition
+CLASS ZCL_DATA IMPLEMENTATION.
+  METHOD GET_GS_LAYOUT.
+    PS_LAYOUT-ZEBRA = 'X'.
+    PS_LAYOUT-GRID_TITLE = GS_TITLE.
+    PS_LAYOUT-SMALLTITLE = 'X'.
+*    PS_LAYOUT-BOX_FNAME = 'CHECKBOX'.
+  ENDMETHOD.                    "GET_GS_LAYOUT
+
+****TODO: Prepare ALV Field Category (column name, type etc)
+  METHOD GET_FIELDCAT.
+    DATA WA_PT_FCAT TYPE LVC_S_FCAT.
+    CLEAR WA_PT_FCAT.
+    WA_PT_FCAT-FIELDNAME = 'FLAG'.
+    WA_PT_FCAT-CHECKBOX = 'X'.
+    WA_PT_FCAT-EDIT = 'X'.
+    WA_PT_FCAT-COLTEXT = 'Select'.
+    WA_PT_FCAT-SELTEXT = 'Select A Row'.
+    APPEND WA_PT_FCAT TO PT_FIELDCAT.
+
+    CLEAR WA_PT_FCAT.
+    WA_PT_FCAT-FIELDNAME = 'MATNR'.
+    WA_PT_FCAT-REF_TABLE = 'RESB'.
+    WA_PT_FCAT-REF_FIELD = 'MATNR'.
+    WA_PT_FCAT-OUTPUTLEN = '18'.
+    WA_PT_FCAT-JUST = 'L'.
+    WA_PT_FCAT-COLTEXT = 'Material'.
+    WA_PT_FCAT-SELTEXT = 'Material'.
+    APPEND WA_PT_FCAT TO PT_FIELDCAT.
+
+    CLEAR WA_PT_FCAT.
+    WA_PT_FCAT-FIELDNAME = 'BDMNG'.
+    WA_PT_FCAT-REF_TABLE = 'RESB'.
+    WA_PT_FCAT-REF_FIELD = 'BDMNG'.
+    WA_PT_FCAT-OUTPUTLEN = '10'.
+    WA_PT_FCAT-JUST = 'R'.
+    WA_PT_FCAT-COLTEXT = 'REQ. QTY'.
+    WA_PT_FCAT-SELTEXT = 'Required Quantity'.
+    APPEND WA_PT_FCAT TO PT_FIELDCAT.
+
+    CLEAR WA_PT_FCAT.
+    WA_PT_FCAT-FIELDNAME = 'ENMNG'.
+    WA_PT_FCAT-REF_TABLE = 'RESB'.
+    WA_PT_FCAT-REF_FIELD = 'ENMNG'.
+    WA_PT_FCAT-OUTPUTLEN = '10'.
+    WA_PT_FCAT-JUST = 'R'.
+    WA_PT_FCAT-COLTEXT = 'WITHDRAWN. QTY'.
+    WA_PT_FCAT-SELTEXT = 'Withdrawn Quantity'.
+    APPEND WA_PT_FCAT TO PT_FIELDCAT.
+
+
+    CLEAR WA_PT_FCAT.
+    WA_PT_FCAT-FIELDNAME = 'LGORT'.
+    WA_PT_FCAT-REF_TABLE = 'RESB'.
+    WA_PT_FCAT-REF_FIELD = 'LGORT'.
+    WA_PT_FCAT-OUTPUTLEN = '10'.
+    WA_PT_FCAT-JUST = 'L'.
+    WA_PT_FCAT-EDIT = 'X'.
+    WA_PT_FCAT-COLTEXT = 'STOR. LOC'.
+    WA_PT_FCAT-SELTEXT = 'Storage Location'.
+    APPEND WA_PT_FCAT TO PT_FIELDCAT.
+
+
+    CLEAR WA_PT_FCAT.
+    WA_PT_FCAT-FIELDNAME = 'RNMNG'.
+    WA_PT_FCAT-REF_TABLE = 'RESB'.
+    WA_PT_FCAT-REF_FIELD = 'ENMNG'.
+    WA_PT_FCAT-OUTPUTLEN = '10'.
+    WA_PT_FCAT-EDIT = 'X'.
+    WA_PT_FCAT-JUST = 'R'.
+    WA_PT_FCAT-COLTEXT = 'ISSUE. QTY'.
+    WA_PT_FCAT-SELTEXT = 'Issue Quantity'.
+    APPEND WA_PT_FCAT TO PT_FIELDCAT.
+
+
+
+  ENDMETHOD.                    "GET_FIELDCAT
+
+
+
+  METHOD    GET_DATA.
+***TODO: prepare the model data here.
+    CLEAR: ITAB_GIITEM.
+    REFRESH: ITAB_GIITEM.
+
+    SELECT AUFNR, RSNUM, RSPOS, MATNR, WERKS, LGORT, BDMNG, ENMNG INTO CORRESPONDING FIELDS OF @WA_GIITEM
+        FROM RESB WHERE AUFNR EQ @P_AUFNR AND XLOEK EQ @SPACE AND BDMNG GT 0 AND SCHGT <> 'X'.
+      WA_GIITEM-RNMNG = WA_GIITEM-BDMNG - WA_GIITEM-ENMNG.
+      READ TABLE ITAB_SELECTEDGIITEM WITH TABLE KEY MATNR = WA_GIITEM-MATNR ASSIGNING FIELD-SYMBOL(<SELECTED>).
+      IF SY-SUBRC = 0.
+        WA_GIITEM-FLAG = 'X'.
+      ENDIF.
+      APPEND WA_GIITEM TO ITAB_GIITEM.
+      CLEAR: WA_GIITEM.
+    ENDSELECT.
+
+  ENDMETHOD.                    "get_data
+
+  METHOD GETSELECTED.
+
+*** Check whether there is any line item selected, if selected, the value must be number
+    REFRESH: SELECTEDITEMS.
+    LOOP AT ITEMS INTO DATA(ITEM) WHERE FLAG = 'X'.
+      INSERT ITEM INTO TABLE SELECTEDITEMS.
+    ENDLOOP.
+    IF  LINES( SELECTEDITEMS ) = 0.
+      MESSAGE I001 WITH 'Please select at least one item'.
+    ENDIF.
+
+  ENDMETHOD.
+
+
+
+*** alv event handling ****
+  METHOD HANDLE_HOTSPOT_CLICK.
+****TODO: Handle hot spot click
+* DATA wa_inv_aging TYPE TY_INV_AGING.
+* READ TABLE i_inv_aging INTO wa_inv_aging index ES_ROW_NO-row_id.
+* IF sy-subrc = 0 AND E_COLUMN_ID-fieldname = 'BELNR'.
+* SET PARAMETER ID 'BLN' field wa_inv_aging-BELNR.
+* SET PARAMETER ID 'BUK' field wa_inv_aging-BUKRS.
+* CALL TRANSACTION 'FB03' AND SKIP FIRST SCREEN.
+* ENDIF.
+  ENDMETHOD.                    "HANDLE_HOTSPOT_CLICK
+
+  METHOD ON_DOUBLE_CLICK.
+****TODO: Handle double click
+* import e_row_id e_column es_row_no
+    DATA:L_ROW    TYPE I,
+         L_COLUMN TYPE LVC_FNAME.
+    L_ROW = E_ROW-INDEX.
+    L_COLUMN = E_COLUMN-FIELDNAME.
+*    READ TABLE i_inv_aging INTO wa_inv_aging index ES_ROW_NO-row_id.
+*  IF sy-subrc = 0 AND E_COLUMN-fieldname = 'BELNR'.
+*    SET PARAMETER ID 'BLN' field wa_inv_aging-BELNR.
+*    SET PARAMETER ID 'BUK' field wa_inv_aging-BUKRS.
+*    CALL TRANSACTION 'FB03' AND SKIP FIRST SCREEN.
+  ENDMETHOD.                    "on_double_click
+
+ENDCLASS. "ZCL_DATA implementation
+
+*************** End of ALV Model and Controller classes***************
+
+
+DATA REF_DATA_OBJECT TYPE REF TO ZCL_DATA.
+*************** ALV related ******************************
+****TODO: Type the report name here.
+DATA: GS_TITLE(50) TYPE C VALUE 'List of Goods Issue'.
+*-- Layout Structure
+DATA GS_LAYOUT TYPE LVC_S_LAYO.
+*-- ALV Service CLASS, display the ALV
+DATA: DIST_ALV_DISPLAY TYPE REF TO ZCL_ALV_SERVICE.
+*-- Field Category
+DATA GT_FIELDCAT TYPE LVC_T_FCAT.
+*-- File Name
+DATA: FNAME(128) TYPE C.
+
+
+
+INITIALIZATION.
+****TODO: initialization here
+
+****TODO: Comment it out or delete it if no radio button action needed to be handled.
+*AT SELECTION-SCREEN ON RADIOBUTTON GROUP R01.
+*
+*END-OF-SELECTION.
+
+*-- when alv variant has been selected, find the stored variant.
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR P_VARI.
+  CALL METHOD ZCL_ALV_SERVICE=>GETVARIANT
+    EXPORTING
+      SAVETYPE   = 'A'
+    CHANGING
+      ES_VARIANT = P_VARI.
+
+END-OF-SELECTION.
+
+
+START-OF-SELECTION.
+
+
+* ALV output or Background job download.
+*  IF RB_SCRN = 'X'.
+  PERFORM ALV_OUTPUT.
+*  ELSE.
+*    PERFORM DOWNLOAD_OUTPUT.
+*  ENDIF.
+
+
+FORM ALV_OUTPUT.
+*************** free the object ref and clean the memory if already called before *************
+  IF REF_DATA_OBJECT IS BOUND.
+    FREE  REF_DATA_OBJECT.
+  ENDIF.
+
+  IF DIST_ALV_DISPLAY IS BOUND.
+    FREE  DIST_ALV_DISPLAY.
+  ENDIF.
+
+  CLEAR: GS_LAYOUT, GT_FIELDCAT.
+  REFRESH:   GT_FIELDCAT.
+
+
+*************** initialize the alv container and pareparing the data***********
+  CREATE OBJECT REF_DATA_OBJECT.
+
+*-- Prepare the selection alv
+  CREATE OBJECT DIST_ALV_DISPLAY
+    EXPORTING
+      IN_ALV_TITLE           = GS_TITLE
+      IN_CUSTOM_CONTROL_NAME = 'CC_ALV'.
+
+* static method call
+  CALL METHOD ZCL_DATA=>GET_GS_LAYOUT
+    EXPORTING
+      GS_TITLE  = GS_TITLE
+    CHANGING
+      PS_LAYOUT = GS_LAYOUT.
+
+* get the prepared field category and feed it when alv object is displayed.
+  CALL METHOD REF_DATA_OBJECT->GET_FIELDCAT
+    CHANGING
+      PT_FIELDCAT = GT_FIELDCAT.
+
+* call method to prepare the data.
+  CALL METHOD REF_DATA_OBJECT->GET_DATA.
+
+* -- register event
+*  SET HANDLER REF_DATA_OBJECT->HANDLE_HOTSPOT_CLICK FOR DIST_ALV_DISPLAY->GR_ALVGRID.
+*  SET HANDLER REF_DATA_OBJECT->ON_DOUBLE_CLICK FOR DIST_ALV_DISPLAY->GR_ALVGRID.
+
+  CALL SCREEN 1001.
+ENDFORM.
+
+*FORM DOWNLOAD_OUTPUT.
+*  IF REF_DATA_OBJECT IS BOUND.
+*    FREE  REF_DATA_OBJECT.
+*  ENDIF.
+*
+**************** initialize the alv container and pareparing the data***********
+*  CREATE OBJECT REF_DATA_OBJECT.
+*
+** call method to prepare the data.
+*  CALL METHOD REF_DATA_OBJECT->GET_DATA.
+*
+*  CONCATENATE P_PATH P_FILE INTO FNAME.
+*  OPEN DATASET FNAME FOR OUTPUT IN TEXT MODE ENCODING DEFAULT.
+*  IF SY-SUBRC = 0.
+*    PERFORM DOWNLOAD_HEADER.
+*    PERFORM DOWNLOAD_DETAIL.
+*    CLOSE DATASET FNAME.
+*  ENDIF.
+
+*ENDFORM.
+*
+**&---------------------------------------------------------------------*
+**&      Form  download_header
+**&---------------------------------------------------------------------*
+** download_header
+**----------------------------------------------------------------------*
+*FORM DOWNLOAD_HEADER.
+*****TODO: prepare the column header
+*  DATA: HEADER(1024).
+*  CONCATENATE 'Carrier' 'Connection' 'Flight Date' 'Customer ID' 'Type' 'Smoker' 'Currency' 'Amount'
+*     INTO HEADER SEPARATED BY HTAB.
+*  TRANSFER HEADER TO FNAME.
+*
+*ENDFORM.
+*
+**&---------------------------------------------------------------------*
+**&      Form  download_detail
+**&---------------------------------------------------------------------*
+** download_detail
+**----------------------------------------------------------------------*
+*FORM DOWNLOAD_DETAIL.
+*  DATA: DETAIL(1024).
+*****TODO: implement download file preparation. Use write to perform number format
+*
+*  DATA: ZFLIGHTDATE(10), ZAMOUNT(15), ZCURRENCY(4).
+*
+*  CLEAR: DETAIL.
+*  LOOP AT ITAB_ALVTABLE INTO WA_ALVTABLE.
+*    WRITE WA_ALVTABLE-FORCURKEY TO ZCURRENCY.
+*    WRITE WA_ALVTABLE-FORCURAM TO ZAMOUNT LEFT-JUSTIFIED DECIMALS 0.
+*    CONCATENATE WA_ALVTABLE-FLDATE+4(2) '/' WA_ALVTABLE-FLDATE+6(2) '/' WA_ALVTABLE-FLDATE+0(4) INTO ZFLIGHTDATE.
+*    CONCATENATE WA_ALVTABLE-CARRID WA_ALVTABLE-CONNID WA_ALVTABLE-FLDATE WA_ALVTABLE-CUSTOMID
+*                WA_ALVTABLE-CUSTTYPE WA_ALVTABLE-SMOKER ZCURRENCY ZAMOUNT
+*       INTO DETAIL SEPARATED BY HTAB.
+*    TRANSFER DETAIL TO FNAME.
+*    CLEAR: DETAIL.
+*  ENDLOOP.
+*
+*ENDFORM.                    " download_detail
+
+*----------------------------------------------------------------------*
+***INCLUDE LZPSI_INTERFACEF03 .
+*----------------------------------------------------------------------*
+*&---------------------------------------------------------------------*
+*&      Form  APPEND_MESSAGE
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM APPEND_MESSAGE
+  USING LV_STRING
+  CHANGING
+    MESSAGE TYPE TDVARLINE.
+  DATA: C_SEPARATED TYPE C VALUE ';',
+        C_LASTCHAR  TYPE C.
+  DATA: L_LENGTH TYPE N.
+
+* Message format
+  IF MESSAGE IS NOT INITIAL.
+    L_LENGTH = STRLEN( MESSAGE ).
+    IF L_LENGTH > 1.
+      L_LENGTH = L_LENGTH - 1.
+      C_LASTCHAR = MESSAGE+0(L_LENGTH).
+      IF C_LASTCHAR = ',' OR C_LASTCHAR = ';' OR C_LASTCHAR = '.'.
+        CLEAR C_SEPARATED.
+      ENDIF.
+    ENDIF.
+  ENDIF.
+
+
+  IF MESSAGE IS INITIAL.
+    MOVE LV_STRING TO MESSAGE.
+  ELSE.
+    IF C_SEPARATED IS INITIAL.
+      CONCATENATE MESSAGE LV_STRING INTO MESSAGE SEPARATED BY SPACE.
+    ELSE.
+      CONCATENATE MESSAGE LV_STRING INTO MESSAGE SEPARATED BY ';'.
+    ENDIF.
+  ENDIF.
+
+ENDFORM.                    " APPEND_MESSAGE
+
+
+*&---------------------------------------------------------------------*
+*&      Form  HANDLE_BAPIRESULT
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->MESSAGE_TYPE  text
+*      -->MESSAGE       text
+*      -->LT_RETURN     text
+*      -->OF            text
+*      -->BAPIRET2      text
+*----------------------------------------------------------------------*
+FORM HANDLE_BAPIRESULT
+    TABLES  LT_RETURN STRUCTURE BAPIRET2
+    CHANGING
+      BAPISTATUS TYPE I
+      MESSAGE TYPE TDVARLINE.
+
+  DATA: WA_RETURN TYPE BAPIRET2.
+  DATA: L_MESSAGE TYPE TDVARLINE.
+
+  IF LT_RETURN[] IS NOT INITIAL.
+    BAPISTATUS = 1.
+
+    SORT LT_RETURN[] BY TYPE ID NUMBER.
+    DELETE ADJACENT DUPLICATES FROM LT_RETURN[] COMPARING TYPE ID NUMBER.
+
+    LOOP AT LT_RETURN INTO WA_RETURN WHERE TYPE = 'E'.
+      BAPISTATUS = 0.
+      CALL FUNCTION 'FORMAT_MESSAGE'
+        EXPORTING
+          ID        = WA_RETURN-ID
+          LANG      = SY-LANGU
+          NO        = WA_RETURN-NUMBER
+          V1        = WA_RETURN-MESSAGE_V1
+          V2        = WA_RETURN-MESSAGE_V2
+          V3        = WA_RETURN-MESSAGE_V3
+          V4        = WA_RETURN-MESSAGE_V4
+        IMPORTING
+          MSG       = L_MESSAGE
+        EXCEPTIONS
+          NOT_FOUND = 1
+          OTHERS    = 2.
+      IF SY-SUBRC = 0.
+        PERFORM APPEND_MESSAGE
+                    USING
+                       L_MESSAGE
+                    CHANGING
+                       MESSAGE.
+      ENDIF.
+    ENDLOOP.
+  ELSE.
+    BAPISTATUS = 0.
+    L_MESSAGE = 'BAPI return table is empty'.
+    PERFORM APPEND_MESSAGE
+            USING
+               L_MESSAGE
+            CHANGING
+               MESSAGE.
+
+  ENDIF. " end of IF LT_RETURN IS NOT INITIAL.
+
+
+ENDFORM.                    " HANDLE_BAPIRESULT
+
+FORM DISPLAY_BAPIRESULT
+    TABLES  LT_BAPIRETURN STRUCTURE BAPIRET2
+    USING STATUS TYPE C   "If empty to display all, otherwise, S Success, E Error, W Warning, I Info, A Abort
+    .
+
+  DATA: WA_RETURN     TYPE BAPIRET2,
+        WA_POPMESSAGE TYPE ESP1_MESSAGE_WA_TYPE.
+  DATA: LT_POPMESSAGE TYPE ESP1_MESSAGE_WA_TYPE OCCURS 20.
+
+
+  IF LT_BAPIRETURN[] IS NOT INITIAL.
+
+    SORT LT_BAPIRETURN[] BY TYPE ID NUMBER.
+    DELETE ADJACENT DUPLICATES FROM LT_BAPIRETURN[] COMPARING TYPE ID NUMBER.
+    IF STATUS = '' OR STATUS = ' '.
+      LOOP AT LT_BAPIRETURN INTO WA_RETURN.
+        WA_POPMESSAGE-MSGTY = WA_RETURN-TYPE.
+        WA_POPMESSAGE-MSGID = WA_RETURN-ID .
+        WA_POPMESSAGE-MSGNO = WA_RETURN-NUMBER .
+        WA_POPMESSAGE-MSGV1 = WA_RETURN-MESSAGE_V1 .
+        WA_POPMESSAGE-MSGV2 = WA_RETURN-MESSAGE_V2 .
+        WA_POPMESSAGE-MSGV3 = WA_RETURN-MESSAGE_V3 .
+        WA_POPMESSAGE-MSGV4 = WA_RETURN-MESSAGE_V4 .
+        WA_POPMESSAGE-LINENO = SY-TABIX.
+        APPEND WA_POPMESSAGE TO LT_POPMESSAGE.
+        CLEAR: WA_RETURN, WA_RETURN.
+      ENDLOOP.
+    ELSE.
+      LOOP AT LT_BAPIRETURN INTO WA_RETURN WHERE TYPE = STATUS.
+        WA_POPMESSAGE-MSGTY = WA_RETURN-TYPE.
+        WA_POPMESSAGE-MSGID = WA_RETURN-ID .
+        WA_POPMESSAGE-MSGNO = WA_RETURN-NUMBER .
+        WA_POPMESSAGE-MSGV1 = WA_RETURN-MESSAGE_V1 .
+        WA_POPMESSAGE-MSGV2 = WA_RETURN-MESSAGE_V2 .
+        WA_POPMESSAGE-MSGV3 = WA_RETURN-MESSAGE_V3 .
+        WA_POPMESSAGE-MSGV4 = WA_RETURN-MESSAGE_V4 .
+        WA_POPMESSAGE-LINENO = SY-TABIX.
+        APPEND WA_POPMESSAGE TO LT_POPMESSAGE.
+        CLEAR: WA_RETURN, WA_RETURN.
+      ENDLOOP.
+    ENDIF.
+    CALL FUNCTION 'C14Z_MESSAGES_SHOW_AS_POPUP'
+      TABLES
+        I_MESSAGE_TAB = LT_POPMESSAGE[].
+
+  ENDIF. " end of IF LT_RETURN IS NOT INITIAL.
+
+
+ENDFORM.                    " HANDLE_BAPIRESULT
+
+
+*&---------------------------------------------------------------------*
+*&      Module  STATUS_1001  OUTPUT
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+MODULE STATUS_1001 OUTPUT.
+  SET PF-STATUS 'ALV'. "Defined in the GUI Status folder
+  SET TITLEBAR 'ALV_TITLE'. "Defined in the GUI Title folder
+****TODO: set your table
+* display it
+  CALL METHOD DIST_ALV_DISPLAY->DISPLAY_ALV
+    CHANGING
+      GT_FIELDCAT = GT_FIELDCAT
+      GS_LAYOUT   = GS_LAYOUT
+      GS_TAB      = ITAB_GIITEM[]
+      GS_VARIANT  = P_VARI.
+ENDMODULE.                 " STATUS_1001  OUTPUT
+*&---------------------------------------------------------------------*
+*&      Module  USER_COMMAND_1001  INPUT
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+MODULE USER_COMMAND_1001 INPUT.
+  CASE SY-UCOMM.
+    WHEN '%ISU'. " Issue Goods
+      REFRESH: ITAB_SELECTEDGIITEM.
+*** Get input
+      CALL METHOD DIST_ALV_DISPLAY->CHECK_CHANGED_DATA.
+
+      CALL METHOD REF_DATA_OBJECT->GETSELECTED
+        EXPORTING
+          ITEMS         = ITAB_GIITEM
+        IMPORTING
+          SELECTEDITEMS = ITAB_SELECTEDGIITEM.
+      IF LINES( ITAB_SELECTEDGIITEM ) > 0.
+        CALL METHOD DIST_ALV_DISPLAY->POST_GOODSISSUE
+          EXPORTING
+            ISISSUE       = 'X'
+            SELECTEDITEMS = ITAB_SELECTEDGIITEM.
+        CALL METHOD REF_DATA_OBJECT->GET_DATA.
+      ENDIF.
+    WHEN '%USU'. " Goods Withdraw
+      REFRESH: ITAB_SELECTEDGIITEM.
+*** Get Input
+      CALL METHOD DIST_ALV_DISPLAY->CHECK_CHANGED_DATA.
+
+      CALL METHOD REF_DATA_OBJECT->GETSELECTED
+        EXPORTING
+          ITEMS         = ITAB_GIITEM
+        IMPORTING
+          SELECTEDITEMS = ITAB_SELECTEDGIITEM.
+      IF LINES( ITAB_SELECTEDGIITEM ) > 0.
+        CALL METHOD DIST_ALV_DISPLAY->POST_GOODSISSUE
+          EXPORTING
+            ISISSUE       = ''
+            SELECTEDITEMS = ITAB_SELECTEDGIITEM.
+        CALL METHOD REF_DATA_OBJECT->GET_DATA.
+      ENDIF.
+    WHEN 'BACK' OR 'EXIT' OR 'RETURN' OR 'CANCEL' OR '&F03' OR '&F12' OR '&F15'.
+      LEAVE TO SCREEN '0'.
+      CALL METHOD DIST_ALV_DISPLAY->FREE.
+    WHEN 'DISPLAY'.
+      LEAVE TO SCREEN 1001.
+  ENDCASE.
+ENDMODULE.                 " USER_COMMAND_1001  INPUT
