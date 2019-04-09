@@ -492,7 +492,7 @@ ENDCLASS. "ZCL_DATA implementation
 
 *************** End of ALV Model and Controller classes***************
 
-
+*************** Initialize MVC objects
 DATA REF_DATA_OBJECT TYPE REF TO ZCL_DATA.
 *************** ALV related ******************************
 ****TODO: Type the report name here.
