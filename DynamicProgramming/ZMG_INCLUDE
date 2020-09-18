@@ -1,0 +1,674 @@
+*&---------------------------------------------------------------------*
+*&  Include  ZMG_INCLUDE
+*&---------------------------------------------------------------------*
+********** Data Definition Shared************
+TYPES: BEGIN OF TY_MAP,
+         INDEX   TYPE I,
+         COLNAME TYPE STRING,
+         MAPNAME TYPE STRING,
+         DEFAULT TYPE STRING.
+TYPES: END OF TY_MAP.
+TYPES: TY_MAPS     TYPE HASHED TABLE OF TY_MAP WITH UNIQUE KEY COLNAME,
+       TY_TEMPLATE TYPE STANDARD TABLE OF TY_MAP.
+
+
+DATA: HTAB TYPE C VALUE CL_ABAP_CHAR_UTILITIES=>HORIZONTAL_TAB.
+
+FORM EXPORT_DATA
+      USING
+         P_FILE TYPE RLGRAP-FILENAME
+         P_DATA TYPE ANY TABLE
+         PT_TEMPLATE TYPE TY_TEMPLATE
+         PT_MAPS TYPE TY_MAPS
+         P_GUI TYPE C.
+
+    IF P_GUI  = 'X'.
+      PERFORM FRONTEND_EXPORT
+                  USING
+                     P_FILE
+                     P_DATA
+                     PT_TEMPLATE
+                     PT_MAPS.
+    ELSE.
+            PERFORM SERVER_EXPORT
+                  USING
+                     P_FILE
+                     P_DATA
+                     PT_TEMPLATE
+                     PT_MAPS.
+    ENDIF.
+
+
+ENDFORM.
+
+FORM FRONTEND_EXPORT
+USING
+          P_FILE TYPE RLGRAP-FILENAME
+          P_DATA TYPE ANY TABLE "sap data
+          PT_TEMPLATE TYPE TY_TEMPLATE "loaded template
+          PT_MAPS TYPE TY_MAPS "mapped, colname=>sap field name and default value
+.
+** Dynamic Table Declarations
+  DATA :  LT_DYN_TABLE TYPE REF TO DATA,
+          LW_DYN_LINE  TYPE REF TO DATA.
+
+* Field Symbold Declaration
+  FIELD-SYMBOLS: <GFS_LINE>,
+                 <GFS_DYN_TABLE> TYPE STANDARD TABLE,
+                 <FS1>.
+
+* RTTS Declaratoins.
+  DATA :   LR_STRUCT_TYP   TYPE REF TO  CL_ABAP_DATADESCR,
+           LR_DYNTABLE_TYP TYPE REF TO  CL_ABAP_TABLEDESCR,
+           LS_COMPONENT    TYPE CL_ABAP_STRUCTDESCR=>COMPONENT,
+           LT_COMPONENT    TYPE         CL_ABAP_STRUCTDESCR=>COMPONENT_TABLE.
+
+* SALV Declarations.
+  DATA  : LO_COLS       TYPE REF TO CL_SALV_COLUMNS,
+          LO_SALV_TABLE TYPE REF TO CL_SALV_TABLE,
+          LO_COLUMN     TYPE REF TO CL_SALV_COLUMN,
+          COL_NAME(30),
+          COL_DESC(20),
+          COL_VALUE     TYPE STRING,
+          L_FILENAME    TYPE STRING.
+
+* Prepare Structure
+
+  LOOP AT PT_TEMPLATE INTO DATA(TP).
+    LS_COMPONENT-NAME = 'COL' && TP-INDEX.
+    LS_COMPONENT-TYPE ?= CL_ABAP_DATADESCR=>DESCRIBE_BY_DATA( COL_VALUE ).
+    APPEND LS_COMPONENT TO LT_COMPONENT.
+    CLEAR: LS_COMPONENT.
+  ENDLOOP.
+
+  LR_STRUCT_TYP ?= CL_ABAP_STRUCTDESCR=>CREATE( P_COMPONENTS = LT_COMPONENT ).
+  LR_DYNTABLE_TYP ?= CL_ABAP_TABLEDESCR=>CREATE( P_LINE_TYPE = LR_STRUCT_TYP ).
+
+  CREATE DATA:
+    LT_DYN_TABLE TYPE HANDLE LR_DYNTABLE_TYP,
+    LW_DYN_LINE TYPE HANDLE LR_STRUCT_TYP.
+
+  ASSIGN LT_DYN_TABLE->* TO <GFS_DYN_TABLE>.
+  ASSIGN LW_DYN_LINE->* TO <GFS_LINE>.
+
+*    create header first
+  LOOP AT PT_TEMPLATE INTO DATA(HBP).
+    COL_NAME = 'COL' && HBP-INDEX.
+    COL_VALUE = HBP-COLNAME.
+    IF <FS1> IS ASSIGNED.
+      UNASSIGN <FS1>.
+    ENDIF.
+    ASSIGN COMPONENT COL_NAME OF STRUCTURE <GFS_LINE> TO <FS1>.
+    IF <FS1> IS ASSIGNED.
+      <FS1> = COL_VALUE.
+    ENDIF.
+  ENDLOOP.
+  APPEND <GFS_LINE> TO <GFS_DYN_TABLE>.
+  CLEAR: LW_DYN_LINE.
+
+*    Populate the dynamic table
+  LOOP AT P_DATA ASSIGNING FIELD-SYMBOL(<FDATA>).
+    LOOP AT PT_TEMPLATE INTO DATA(TBP).
+      COL_VALUE = ''.
+      READ TABLE PT_MAPS ASSIGNING FIELD-SYMBOL(<FMAP>) WITH TABLE KEY COLNAME = TBP-COLNAME.
+      IF SY-SUBRC = 0. "Found mapping
+        IF <FMAP>-MAPNAME IS NOT INITIAL. "Check value in structure <FDATA>
+          ASSIGN COMPONENT <FMAP>-MAPNAME OF STRUCTURE <FDATA> TO FIELD-SYMBOL(<FVALUE>).
+          IF <FVALUE> IS ASSIGNED.
+            COL_VALUE = <FVALUE>.
+          ELSE.
+            COL_VALUE = 'MISSING MAP FIELD ' && COL_NAME.
+          ENDIF.
+          UNASSIGN <FVALUE>.
+        ELSE. " check default value
+          COL_VALUE = <FMAP>-DEFAULT.
+        ENDIF.
+      ENDIF.
+      IF <FS1> IS ASSIGNED.
+        UNASSIGN <FS1>.
+      ENDIF.
+      IF <FS1> IS ASSIGNED.
+        UNASSIGN <FS1>.
+      ENDIF.
+      COL_NAME = 'COL' && <FMAP>-INDEX.
+      ASSIGN COMPONENT COL_NAME OF STRUCTURE <GFS_LINE> TO <FS1>.
+      IF <FS1> IS ASSIGNED.
+        <FS1> = COL_VALUE.
+      ELSE.
+        WRITE:/ 'dynamic field field symbol is not assigned...'.
+      ENDIF.
+
+    ENDLOOP.
+    APPEND <GFS_LINE> TO <GFS_DYN_TABLE>.
+    CLEAR: LW_DYN_LINE.
+  ENDLOOP.
+  L_FILENAME = P_FILE.
+  CALL METHOD CL_GUI_FRONTEND_SERVICES=>GUI_DOWNLOAD
+    EXPORTING
+*     BIN_FILESIZE          =
+      FILENAME              = L_FILENAME
+      FILETYPE              = 'ASC'
+*     APPEND                = SPACE
+      WRITE_FIELD_SEPARATOR = 'X'
+*     HEADER                = '00'
+*     TRUNC_TRAILING_BLANKS = SPACE
+*     WRITE_LF              = 'X'
+*     COL_SELECT            = SPACE
+*     COL_SELECT_MASK       = SPACE
+*     DAT_MODE              = SPACE
+      CONFIRM_OVERWRITE     = SPACE
+*     NO_AUTH_CHECK         = SPACE
+*     CODEPAGE              = SPACE
+*     IGNORE_CERR           = ABAP_TRUE
+*     REPLACEMENT           = '#'
+*     WRITE_BOM             = SPACE
+*     TRUNC_TRAILING_BLANKS_EOL = 'X'
+*     WK1_N_FORMAT          = SPACE
+*     WK1_N_SIZE            = SPACE
+*     WK1_T_FORMAT          = SPACE
+*     WK1_T_SIZE            = SPACE
+*     SHOW_TRANSFER_STATUS  = 'X'
+*     FIELDNAMES            =
+*     WRITE_LF_AFTER_LAST_LINE  = 'X'
+*     VIRUS_SCAN_PROFILE    = '/SCET/GUI_DOWNLOAD'
+*    IMPORTING
+*     FILELENGTH            =
+    CHANGING
+      DATA_TAB              = <GFS_DYN_TABLE>
+*    EXCEPTIONS
+*     FILE_WRITE_ERROR      = 1
+*     NO_BATCH              = 2
+*     GUI_REFUSE_FILETRANSFER   = 3
+*     INVALID_TYPE          = 4
+*     NO_AUTHORITY          = 5
+*     UNKNOWN_ERROR         = 6
+*     HEADER_NOT_ALLOWED    = 7
+*     SEPARATOR_NOT_ALLOWED = 8
+*     FILESIZE_NOT_ALLOWED  = 9
+*     HEADER_TOO_LONG       = 10
+*     DP_ERROR_CREATE       = 11
+*     DP_ERROR_SEND         = 12
+*     DP_ERROR_WRITE        = 13
+*     UNKNOWN_DP_ERROR      = 14
+*     ACCESS_DENIED         = 15
+*     DP_OUT_OF_MEMORY      = 16
+*     DISK_FULL             = 17
+*     DP_TIMEOUT            = 18
+*     FILE_NOT_FOUND        = 19
+*     DATAPROVIDER_EXCEPTION    = 20
+*     CONTROL_FLUSH_ERROR   = 21
+*     NOT_SUPPORTED_BY_GUI  = 22
+*     ERROR_NO_GUI          = 23
+*     OTHERS                = 24
+    .
+  IF SY-SUBRC = 0.
+    WRITE:/ 'Export to file ', L_FILENAME.
+  ELSE.
+    WRITE:/ 'Failed to export to file ', L_FILENAME.
+  ENDIF.
+
+
+ENDFORM.
+
+
+*FORM CREATE_INTERNAL_TABLE
+*    USING
+*          P_DATA TYPE ANY TABLE "sap data
+*          PT_TEMPLATE TYPE TY_TEMPLATE "loaded template
+*          PT_MAPS TYPE TY_MAPS "mapped, colname=>sap field name and default value
+*    CHANGING
+*          PT_DYN_TABLE TYPE REF TO DATA.
+*
+******** ceate field category  **********
+*  DATA: FNAME        TYPE STRING,
+*        L_FIELDVALUE TYPE STRING.
+*  DATA: LW_LINE     TYPE REF TO DATA,
+*        LW_LINE1    TYPE REF TO DATA,
+*        LW_DYN_FCAT TYPE LVC_S_FCAT,
+*        LT_DYN_FCAT TYPE LVC_T_FCAT.
+*  FIELD-SYMBOLS: <LFS_LINE>, <LFS_LINE1>, <LFS_DYN_TABLE> TYPE STANDARD TABLE,<FS1>.
+*
+*
+*  LOOP AT PT_TEMPLATE INTO DATA(TP).
+*    LW_DYN_FCAT-FIELDNAME = TP-COLNAME.
+*    LW_DYN_FCAT-OUTPUTLEN = 50.
+*    LW_DYN_FCAT-TABNAME = 'IT_DYN'.
+*    LW_DYN_FCAT-COLTEXT = TP-COLNAME.
+*    LW_DYN_FCAT-COL_POS = TP-INDEX.
+*    APPEND LW_DYN_FCAT TO LT_DYN_FCAT.
+*  ENDLOOP.
+*
+*  CALL METHOD CL_ALV_TABLE_CREATE=>CREATE_DYNAMIC_TABLE
+*    EXPORTING
+*      I_STYLE_TABLE             = 'X'
+*      IT_FIELDCATALOG           = LT_DYN_FCAT
+*     I_LENGTH_IN_BYTE          =
+*    IMPORTING
+*      EP_TABLE                  = PT_DYN_TABLE
+*     E_STYLE_FNAME             =
+*    EXCEPTIONS
+*      GENERATE_SUBPOOL_DIR_FULL = 1
+*      OTHERS                    = 2.
+*  IF SY-SUBRC <> 0.
+*     Implement suitable error handling here
+*    WRITE:/ 'Failed to create dynamic table...'.
+*  ELSE.
+*     Assign the new table to field symbol
+*    ASSIGN PT_DYN_TABLE->* TO <LFS_DYN_TABLE>.
+*  ENDIF.
+*
+*    Populate the dynamic table
+*  LOOP AT P_DATA ASSIGNING FIELD-SYMBOL(<FDATA>).
+*     Create dynamic work area for the dynamic table
+*    CREATE DATA LW_LINE LIKE LINE OF <LFS_DYN_TABLE>.
+*    CREATE DATA LW_LINE1 LIKE LINE OF <LFS_DYN_TABLE>.
+*    ASSIGN LW_LINE->* TO <LFS_LINE>.
+*    LOOP AT PT_TEMPLATE INTO DATA(TBP).
+*      L_FIELDVALUE = ''.
+*      READ TABLE PT_MAPS ASSIGNING FIELD-SYMBOL(<FMAP>) WITH TABLE KEY COLNAME = TBP-COLNAME.
+*      IF SY-SUBRC = 0. "Found mapping
+*        IF <FMAP>-MAPNAME IS NOT INITIAL. "Check value in structure <FDATA>
+*          DATA(L_FIELDNAME) = <FMAP>-MAPNAME.
+*          ASSIGN COMPONENT L_FIELDNAME OF STRUCTURE <FDATA> TO FIELD-SYMBOL(<FVALUE>).
+*          IF <FVALUE> IS ASSIGNED.
+*            L_FIELDVALUE = <FVALUE>.
+*          ELSE.
+*            L_FIELDVALUE = 'MISSING MAP FIELD ' && L_FIELDNAME.
+*          ENDIF.
+*          UNASSIGN <FVALUE>.
+*        ELSE. " check default value
+*          L_FIELDVALUE = <FMAP>-DEFAULT.
+*        ENDIF.
+*      ENDIF.
+*      ASSIGN COMPONENT L_FIELDNAME OF STRUCTURE <LFS_LINE> TO <FS1>.
+*      IF <FS1> IS ASSIGNED.
+*        <FS1> = L_FIELDVALUE.
+*      ELSE.
+*        WRITE:/ 'dynamic field field symbol is not assigned...'.
+*      ENDIF.
+*      UNASSIGN <FS1>.
+*    ENDLOOP.
+*    APPEND LW_LINE TO <LFS_DYN_TABLE>.
+*    UNASSIGN <LFS_LINE>.
+*
+*  ENDLOOP.
+*
+*ENDFORM.
+
+*** Download to the server side.
+FORM SERVER_EXPORT
+      USING
+         P_FILE TYPE RLGRAP-FILENAME
+         P_DATA TYPE ANY TABLE
+         PT_TEMPLATE TYPE TY_TEMPLATE
+         PT_MAPS TYPE TY_MAPS.
+  DATA: FNAME(128) TYPE C.
+  DATA: DETAIL(8192),
+        L_FIELDVALUE TYPE STRING.
+  FNAME = P_FILE.
+  OPEN DATASET FNAME FOR OUTPUT IN TEXT MODE ENCODING DEFAULT.
+  IF SY-SUBRC = 0.
+************ Write Header *************
+    LOOP AT PT_TEMPLATE INTO DATA(TP).
+      DETAIL = DETAIL && HTAB && TP-COLNAME.
+    ENDLOOP.
+    SHIFT DETAIL BY 1 PLACES LEFT IN CHARACTER MODE.
+    TRANSFER DETAIL TO FNAME.
+    CLEAR: DETAIL.
+
+************ Write Body ***************
+    LOOP AT P_DATA ASSIGNING FIELD-SYMBOL(<FDATA>).
+      LOOP AT PT_TEMPLATE INTO DATA(TBP).
+        L_FIELDVALUE = ''.
+        READ TABLE PT_MAPS ASSIGNING FIELD-SYMBOL(<FMAP>) WITH TABLE KEY COLNAME = TBP-COLNAME.
+        IF SY-SUBRC = 0. "Found mapping
+          IF <FMAP>-MAPNAME IS NOT INITIAL. "Check value in structure <FDATA>
+            DATA(L_FIELDNAME) = <FMAP>-MAPNAME.
+            ASSIGN COMPONENT L_FIELDNAME OF STRUCTURE <FDATA> TO FIELD-SYMBOL(<FVALUE>).
+            IF <FVALUE> IS ASSIGNED.
+              L_FIELDVALUE = <FVALUE>.
+            ELSE.
+              L_FIELDVALUE = 'MISSING MAP FIELD ' && L_FIELDNAME.
+            ENDIF.
+            UNASSIGN <FVALUE>.
+          ELSE. " check default value
+            L_FIELDVALUE = <FMAP>-DEFAULT.
+          ENDIF.
+        ENDIF.
+        DETAIL = DETAIL && HTAB && L_FIELDVALUE.
+      ENDLOOP.
+
+      SHIFT DETAIL BY 1 PLACES LEFT IN CHARACTER MODE.
+      TRANSFER DETAIL TO FNAME.
+      CLEAR: DETAIL.
+    ENDLOOP.
+
+    CLOSE DATASET FNAME.
+    WRITE:/ 'Export to file ', P_FILE.
+  ELSE.
+    WRITE:/ 'Failed to open data set for ', P_FILE.
+  ENDIF.
+
+ENDFORM.
+
+FORM PREPARE_MAPPING
+    USING PT_TEMPLATEPATH TYPE RLGRAP-FILENAME
+          P_STARTCOL TYPE I
+          P_STARTROW TYPE I
+          P_ENDCOL TYPE I
+          P_ENDROW TYPE I
+          P_COLNAMEROW TYPE I
+          P_MAPROW TYPE I
+          P_DEFAULTVALUEROW TYPE I
+          P_GUI TYPE C
+    CHANGING
+            PT_TEMPLATE TYPE TY_TEMPLATE
+            P_MAPPINGS TYPE TY_MAPS.
+  IF P_GUI = 'X'.
+    PERFORM FRONTEND_PREPARE_MAPPING
+                USING
+                   PT_TEMPLATEPATH
+                   P_STARTCOL
+                   P_STARTROW
+                   P_ENDCOL
+                   P_ENDROW
+                   P_COLNAMEROW
+                   P_MAPROW
+                   P_DEFAULTVALUEROW
+                CHANGING
+                   PT_TEMPLATE
+                   P_MAPPINGS.
+  ELSE.
+    PERFORM SERVER_PREPARE_MAPPING
+              USING
+                 PT_TEMPLATEPATH
+                 P_STARTCOL
+                 P_STARTROW
+                 P_ENDCOL
+                 P_ENDROW
+                 P_COLNAMEROW
+                 P_MAPROW
+                 P_DEFAULTVALUEROW
+              CHANGING
+                 PT_TEMPLATE
+                 P_MAPPINGS.
+  ENDIF.
+
+ENDFORM.
+FORM SERVER_PREPARE_MAPPING
+    USING PT_TEMPLATEPATH TYPE RLGRAP-FILENAME
+          P_STARTCOL TYPE I
+          P_STARTROW TYPE I
+          P_ENDCOL TYPE I
+          P_ENDROW TYPE I
+          P_COLNAMEROW TYPE I
+          P_MAPROW TYPE I
+          P_DEFAULTVALUEROW TYPE I
+    CHANGING
+            PT_TEMPLATE TYPE TY_TEMPLATE
+            P_MAPPINGS TYPE TY_MAPS.
+  DATA: ITAB  LIKE ALSMEX_TABLINE OCCURS 0 WITH HEADER LINE,
+        L_MAP TYPE TY_MAP.
+  DATA: LV_ROW    TYPE I VALUE 0,
+        LV_COL    TYPE I VALUE 0,
+        LV_STRING TYPE STRING.
+
+  DATA: LT_SPLIT TYPE TABLE OF STRING.
+
+
+************ Read CSV template File, comma deliminated ****************
+  OPEN DATASET PT_TEMPLATEPATH FOR INPUT IN TEXT MODE ENCODING DEFAULT IGNORING CONVERSION ERRORS.
+  IF SY-SUBRC EQ 0.
+    REFRESH: ITAB.
+    DO.
+      LV_ROW = LV_ROW + 1.
+      IF LV_ROW < P_STARTROW.
+        CONTINUE.
+      ENDIF.
+      IF LV_ROW > P_ENDROW.
+        EXIT.
+      ENDIF.
+      TRY.
+          READ DATASET PT_TEMPLATEPATH INTO LV_STRING.
+*          replace all occurrences of cl_abap_char_utilities=>cr_lf in lv_string with ''.
+*         replace all occurrences of cl_abap_char_utilities=>NEWLINE in lv_string with ''.
+*         replace all occurrences of cl_abap_char_utilities=>FORM_FEED in lv_string with ''.
+          DATA(LEN) = STRLEN( LV_STRING ).
+          IF LEN > 0.
+          LEN = LEN - 1.
+          LV_STRING = LV_STRING+0(LEN).
+          SPLIT LV_STRING AT ',' INTO TABLE LT_SPLIT.
+          LV_COL = 0.
+          LOOP AT LT_SPLIT INTO DATA(VALUE).
+            CLEAR: ITAB.
+            LV_COL  = LV_COL + 1.
+            IF LV_COL > P_ENDCOL.
+              EXIT.
+            ENDIF.
+            ITAB-ROW = LV_ROW.
+            ITAB-COL = LV_COL.
+            ITAB-VALUE = VALUE.
+            APPEND ITAB TO ITAB.
+          ENDLOOP.
+          ENDIF.
+        CATCH CX_SY_CONVERSION_CODEPAGE.
+          CONTINUE.
+      ENDTRY.
+    ENDDO.
+  ELSE.
+    WRITE:/ 'Failed to open template at server side ',PT_TEMPLATEPATH.
+    EXIT.
+  ENDIF.
+
+
+************
+  REFRESH: PT_TEMPLATE.
+******* Column Name Row
+  LOOP AT ITAB WHERE ROW = P_COLNAMEROW AND VALUE <>''.
+    CLEAR: L_MAP.
+    L_MAP-INDEX = ITAB-COL.
+    L_MAP-COLNAME = ITAB-VALUE.
+    APPEND L_MAP TO PT_TEMPLATE.
+  ENDLOOP.
+******* Mapping Row
+  LOOP AT ITAB WHERE ROW = P_MAPROW AND VALUE <>''.
+    TRY.
+        PT_TEMPLATE[ INDEX = ITAB-COL ]-MAPNAME = ITAB-VALUE.
+      CATCH CX_SY_ITAB_LINE_NOT_FOUND.
+    ENDTRY.
+  ENDLOOP.
+******* Default Value Row
+  LOOP AT ITAB WHERE ROW = P_DEFAULTVALUEROW AND VALUE <>''.
+    TRY.
+        PT_TEMPLATE[ INDEX = ITAB-COL ]-DEFAULT = ITAB-VALUE.
+      CATCH CX_SY_ITAB_LINE_NOT_FOUND.
+    ENDTRY.
+  ENDLOOP.
+
+
+  LOOP AT PT_TEMPLATE ASSIGNING FIELD-SYMBOL(<FROW>).
+    INSERT <FROW> INTO TABLE P_MAPPINGS.
+  ENDLOOP.
+
+ENDFORM.
+
+FORM FRONTEND_PREPARE_MAPPING
+    USING PT_TEMPLATEPATH TYPE RLGRAP-FILENAME
+          P_STARTCOL TYPE I
+          P_STARTROW TYPE I
+          P_ENDCOL TYPE I
+          P_ENDROW TYPE I
+          P_COLNAMEROW TYPE I
+          P_MAPROW TYPE I
+          P_DEFAULTVALUEROW TYPE I
+    CHANGING
+            PT_TEMPLATE TYPE TY_TEMPLATE
+            P_MAPPINGS TYPE TY_MAPS.
+  DATA: ITAB  LIKE ALSMEX_TABLINE OCCURS 0 WITH HEADER LINE,
+        L_MAP TYPE TY_MAP.
+
+
+  CALL FUNCTION 'ALSM_EXCEL_TO_INTERNAL_TABLE'
+    EXPORTING
+      FILENAME                = PT_TEMPLATEPATH
+      I_BEGIN_COL             = P_STARTCOL
+      I_BEGIN_ROW             = P_STARTROW
+      I_END_COL               = P_ENDCOL
+      I_END_ROW               = P_ENDROW
+    TABLES
+      INTERN                  = ITAB
+    EXCEPTIONS
+      INCONSISTENT_PARAMETERS = 1
+      UPLOAD_OLE              = 2
+      OTHERS                  = 3.
+  IF SY-SUBRC <> 0.
+    MESSAGE E007(ZAT) WITH TEXT-001 PT_TEMPLATEPATH. "Problem Open Excel Spreadsheet
+  ENDIF.
+  IF ITAB[] IS INITIAL.
+    WRITE:/ 'Check the tempalte file. No data found in the template :', PT_TEMPLATEPATH.
+    EXIT.
+  ELSE. "
+************
+    REFRESH: PT_TEMPLATE.
+******* Column Name Row
+    LOOP AT ITAB WHERE ROW = P_COLNAMEROW AND VALUE <>''.
+      CLEAR: L_MAP.
+      L_MAP-INDEX = ITAB-COL.
+      L_MAP-COLNAME = ITAB-VALUE.
+      APPEND L_MAP TO PT_TEMPLATE.
+    ENDLOOP.
+******* Mapping Row
+    LOOP AT ITAB WHERE ROW = P_MAPROW AND VALUE <>''.
+      TRY.
+          PT_TEMPLATE[ INDEX = ITAB-COL ]-MAPNAME = ITAB-VALUE.
+        CATCH CX_SY_ITAB_LINE_NOT_FOUND.
+      ENDTRY.
+    ENDLOOP.
+******* Default Value Row
+    LOOP AT ITAB WHERE ROW = P_DEFAULTVALUEROW AND VALUE <>''.
+      TRY.
+          PT_TEMPLATE[ INDEX = ITAB-COL ]-DEFAULT = ITAB-VALUE.
+        CATCH CX_SY_ITAB_LINE_NOT_FOUND.
+      ENDTRY.
+    ENDLOOP.
+  ENDIF.
+
+  LOOP AT PT_TEMPLATE ASSIGNING FIELD-SYMBOL(<FROW>).
+    INSERT <FROW> INTO TABLE P_MAPPINGS.
+  ENDLOOP.
+
+ENDFORM.
+
+FORM BROWSE_TEMPLATEFILEPATH
+  USING
+    P_FILEEXTENSION TYPE STRING
+  CHANGING
+    P_TEMPLATEFILEPATH TYPE RLGRAP-FILENAME
+    P_EXPORTFILENAME TYPE RLGRAP-FILENAME.
+
+  CALL FUNCTION 'F4_FILENAME'
+    EXPORTING
+      PROGRAM_NAME  = SYST-CPROG
+      DYNPRO_NUMBER = SYST-DYNNR
+      FIELD_NAME    = 'TemplateFile.xlsx'
+    IMPORTING
+      FILE_NAME     = P_TEMPLATEFILEPATH.
+
+  PERFORM GET_EXPORTFILENAME
+              USING
+                 P_TEMPLATEFILEPATH
+                 P_FILEEXTENSION
+                 ''
+              CHANGING
+                 P_EXPORTFILENAME.
+
+ENDFORM.
+
+FORM PREPARE_EXPORT_FILEPATH
+    USING
+         P_EXPORTFILEDIR TYPE RLGRAP-FILENAME
+         P_EXPORTFILENAME TYPE RLGRAP-FILENAME
+         P_EXPORTFILEEXTENSION TYPE STRING
+         P_TEMPLATEFILEPATH TYPE RLGRAP-FILENAME
+         P_GUI TYPE C
+    CHANGING
+         P_EXPORTFILEPATH TYPE RLGRAP-FILENAME.
+  DATA: L_EXPORTFILENAME    TYPE RLGRAP-FILENAME, " Store data from P_EXPORTFILENAME
+        L_LAST              TYPE C,
+        L_FILEPATHSEPARATOR TYPE C VALUE '/'.
+  L_EXPORTFILENAME = P_EXPORTFILENAME.
+******** get file separator
+  IF P_GUI = 'X'.
+    TRY.
+        CALL METHOD CL_GUI_FRONTEND_SERVICES=>GET_FILE_SEPARATOR
+          CHANGING
+            FILE_SEPARATOR       = L_FILEPATHSEPARATOR
+          EXCEPTIONS
+            ERROR_NO_GUI         = 1
+            CNTL_ERROR           = 2
+            NOT_SUPPORTED_BY_GUI = 3
+            OTHERS               = 4.
+        IF SY-SUBRC <> 0.
+          RAISE X_ERROR.
+        ENDIF.
+      CATCH CX_SY_DYN_CALL_ERROR.
+        RAISE X_ERROR.
+    ENDTRY.
+  ENDIF.
+
+******** get the export file name from template name
+  IF L_EXPORTFILENAME is INITIAL or L_EXPORTFILENAME = ''.
+    PERFORM GET_EXPORTFILENAME
+                USING
+                   P_TEMPLATEFILEPATH
+                   P_EXPORTFILEEXTENSION
+                   L_FILEPATHSEPARATOR
+                CHANGING
+                   L_EXPORTFILENAME.
+  ENDIF.
+
+  DATA(LEN) = STRLEN( P_EXPORTFILEDIR ).
+  IF LEN > 0.
+    DATA(LASTPOS) = LEN - 1.
+    DATA(LASTONE) = P_EXPORTFILEDIR+LASTPOS(1).
+    IF LASTONE = L_FILEPATHSEPARATOR.
+      P_EXPORTFILEPATH = P_EXPORTFILEDIR  && L_EXPORTFILENAME.
+    ELSE.
+      P_EXPORTFILEPATH = P_EXPORTFILEDIR && L_FILEPATHSEPARATOR && L_EXPORTFILENAME.
+    ENDIF.
+  ENDIF.
+ENDFORM.
+
+
+FORM GET_EXPORTFILENAME
+    USING P_FILEPATH TYPE RLGRAP-FILENAME
+          P_EXTENSION TYPE STRING
+          P_FILEPATHSEPARATOR TYPE C
+    CHANGING P_EXPORTFILENAME TYPE RLGRAP-FILENAME.
+
+*  Works only in Front End
+*  CALL FUNCTION 'SO_SPLIT_FILE_AND_PATH'
+*    EXPORTING
+*      FULL_NAME     = P_FILEPATH
+*    IMPORTING
+*      STRIPPED_NAME = P_EXPORTFILENAME
+**     FILE_PATH     =
+**   EXCEPTIONS
+**     X_ERROR       = 1
+**     OTHERS        = 2
+*    .
+
+  IF P_EXPORTFILENAME is INITIAL or P_EXPORTFILENAME = ''.
+    split P_FILEPATH at P_FILEPATHSEPARATOR into table data(itab).
+    if itab[] is not INITIAL.
+      data(count) = lines( itab ).
+      if count > 0.
+        P_EXPORTFILENAME = itab[ count ].
+      endif.
+    endif.
+  ENDIF.
+
+
+  SPLIT P_EXPORTFILENAME AT '.' INTO DATA(FNAME) DATA(EXT).
+  P_EXPORTFILENAME = FNAME && '.' && P_EXTENSION.
+ENDFORM.
