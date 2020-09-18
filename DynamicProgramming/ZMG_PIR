@@ -1,0 +1,598 @@
+*&---------------------------------------------------------------------*
+*& Report  ZMG_PIR
+*&
+*&---------------------------------------------------------------------*
+*&
+*&
+*&---------------------------------------------------------------------*
+REPORT ZMG_PIR.
+INCLUDE ZMG_INCLUDE.
+TABLES: EINA, EINE, A017, A018, KONP, KONM, LFA1, LFM1, MAKT, ZMAPS_ORACLE, STXH.
+
+
+
+************ Template Specific ***************
+DATA:
+  G_STARTROW TYPE I VALUE 1, "also the column row
+  G_MAPROW   TYPE I VALUE 2,
+  G_DEFTROW  TYPE I VALUE 3,
+  G_ENDROW   TYPE I,
+  G_STARTCOL TYPE I VALUE 1,
+  G_ENDCOL   TYPE I VALUE 280.
+DATA:
+*  G_FILEPATHSEPARATOR TYPE C,
+  G_FILEEXTENSION     TYPE STRING VALUE 'txt'.
+DATA:
+  G_FILENAME_HEADER         TYPE RLGRAP-FILENAME,
+  G_FILENAME_LINES          TYPE RLGRAP-FILENAME,
+  G_FILENAME_LINE_LOCATIONS TYPE RLGRAP-FILENAME,
+  G_FILE_HEADER             TYPE RLGRAP-FILENAME,
+  G_FILE_LINES              TYPE RLGRAP-FILENAME,
+  G_FILE_LINE_LOCATIONS     TYPE RLGRAP-FILENAME.
+DATA: ZBATCH TYPE STRING,
+      ZDATE  LIKE SY-DATUM.
+
+
+DATA:
+  HTAB_HEADER         TYPE TY_MAPS,
+  HTAB_LINES          TYPE TY_MAPS,
+  HTAB_LINE_LOCATIONS TYPE TY_MAPS.
+DATA:
+  ITAB_HEADER         TYPE TY_TEMPLATE,
+  ITAB_LINES          TYPE TY_TEMPLATE,
+  ITAB_LINE_LOCATIONS TYPE TY_TEMPLATE.
+
+
+
+**** price condition, mapped to po_line_locations
+TYPES: BEGIN OF TY_PIRHI,
+         NAME1 TYPE LFA1-NAME1,
+         LAND1 TYPE LFA1-LAND1,
+         WAERS TYPE LFM1-WAERS,
+         ZTERM TYPE LFM1-ZTERM,
+         LIFNR TYPE LFA1-LIFNR,
+         INFNR TYPE EINE-INFNR,
+         EKORG TYPE EINE-EKORG,
+         ESOKZ TYPE EINE-ESOKZ,
+         WERKS TYPE EINE-WERKS,
+         EKGRP TYPE EINE-EKGRP,
+         NETPR TYPE EINE-NETPR,
+         BPRME TYPE EINE-BPRME,
+         MATNR TYPE MAKT-MATNR,
+         MAKTX TYPE MAKT-MAKTX.
+TYPES: END OF TY_PIRHI.
+**** header
+TYPES: BEGIN OF TY_HEADER, "EINA
+         HEADNUM TYPE I,
+         ZBATCH  TYPE STRING,
+         ZBUYER TYPE STRING,
+*         INFNR   LIKE EINA-INFNR, "
+*         LIFNR   LIKE EINA-LIFNR, "
+*         MATNR   LIKE EINA-MATNR, "
+*         EKORG   LIKE LFM1-EKORG, "
+         LIFNR   LIKE EINA-LIFNR,
+         NAME1   LIKE LFA1-NAME1,
+         LAND1   LIKE LFA1-LAND1,
+         WAERS   LIKE LFM1-WAERS,
+         EKGRP   LIKE EINE-EKGRP,
+         ZTERM   TYPE STRING,
+         SSITE   TYPE STRING,  "GT_PIRHI-NAME1(4)+_+GT_PIRHI-LAND1
+         STARTD  TYPE STRING.
+TYPES END OF TY_HEADER.
+
+**** line
+TYPES: BEGIN OF TY_LINES, "EINE
+         HEADNUM TYPE STRING,
+         LINENUM TYPE I,
+         LINEKEY TYPE STRING, "HEADNUM-LINENUM
+         EKGRP   TYPE EINE-EKGRP,
+         NETPR   TYPE EINE-NETPR,
+         BPRME   TYPE EINE-BPRME,
+         MATNR   LIKE EINA-MATNR,
+         MAKTX   LIKE MAKT-MAKTX,
+         SUPNOTE TYPE STRING. "Note to Supplier
+TYPES END OF TY_LINES.
+
+**** pricing
+TYPES: BEGIN OF TY_LOCS," KONM
+         LOCKEY   TYPE STRING, "LINEKY-PRICENUM
+         LINEKEY  TYPE STRING,
+         PRICENUM TYPE I,
+         KSTBM    LIKE KONM-KSTBM,
+         KBETR    LIKE KONM-KBETR.
+TYPES END OF TY_LOCS.
+
+DATA: GT_ESOKZ TYPE ESOKZ.
+DATA: GT_A017 TYPE STANDARD TABLE OF A017  WITH HEADER LINE.
+DATA: GT_PIRHI TYPE STANDARD TABLE OF TY_PIRHI WITH HEADER LINE.
+DATA: GT_KONM TYPE STANDARD TABLE OF KONM WITH HEADER LINE.
+DATA: GT_HEADER TYPE STANDARD TABLE OF TY_HEADER WITH HEADER LINE,
+      G_HEADER  TYPE TY_HEADER.
+DATA: GT_LINES TYPE STANDARD TABLE OF TY_LINES WITH HEADER LINE,
+      G_LINES  TYPE TY_LINES.
+DATA: GT_LOCS TYPE STANDARD TABLE OF TY_LOCS WITH HEADER LINE,
+      G_LOCS  TYPE TY_LOCS.
+DATA: GT_MAPS_ORACLE TYPE STANDARD TABLE OF ZMAPS_ORACLE WITH HEADER LINE.
+DATA: GT_TEXTLINES TYPE STANDARD TABLE OF TLINE WITH HEADER LINE.
+DATA: GT_STXH TYPE STANDARD TABLE OF STXH WITH HEADER LINE.
+
+  DATA: L_TDOBJECT LIKE THEAD-TDOBJECT VALUE 'EINE'.
+  DATA: L_TDID LIKE THEAD-TDID VALUE 'BT'.
+  DATA: L_LANGUAGE LIKE THEAD-TDSPRAS VALUE 'E'.
+  DATA: L_TDNAME LIKE THEAD-TDNAME.
+******************** Selection Screen ***********************************
+SELECTION-SCREEN BEGIN OF BLOCK B1 WITH FRAME TITLE TEXT-TF1.
+PARAMETERS:
+  P_OUTPUT TYPE RLGRAP-FILENAME,
+  P_HEADER TYPE RLGRAP-FILENAME,
+  P_LINES  TYPE RLGRAP-FILENAME,
+  P_LOCS   TYPE RLGRAP-FILENAME.
+SELECTION-SCREEN END OF BLOCK B1.
+
+SELECTION-SCREEN BEGIN OF BLOCK B2 WITH FRAME TITLE TEXT-TF2.
+PARAMETERS:
+  P_TPROW  TYPE I DEFAULT 1,  " template header row
+  P_MPROW  TYPE I DEFAULT 2, " mapping source row
+  P_TPDEF  TYPE I DEFAULT 3,  " template default value row
+  P_TPSCOL TYPE I DEFAULT 1, "starting column
+  P_TPCOL  TYPE I DEFAULT 280. " template column count
+SELECTION-SCREEN END OF BLOCK B2.
+
+SELECTION-SCREEN BEGIN OF BLOCK B3 WITH FRAME TITLE TEXT-TF3.
+SELECT-OPTIONS:  S_EKORG FOR  A017-EKORG DEFAULT '4123'.
+SELECT-OPTIONS:  S_MATNR FOR  A017-MATNR.
+PARAMETERS: P_HSTART TYPE I DEFAULT 699.
+PARAMETERS: P_BATCH TYPE STRING.
+SELECTION-SCREEN END OF BLOCK B3.
+
+SELECTION-SCREEN BEGIN OF BLOCK B4 WITH FRAME TITLE TEXT-TF4.
+*SELECTION-SCREEN COMMENT 5(25) TEXT-TF3.
+PARAMETERS:  P_PIRSTD RADIOBUTTON GROUP R01 DEFAULT 'X' , "Standard
+             P_PIRSUB RADIOBUTTON GROUP R01. "Subcontracting
+SELECTION-SCREEN END OF BLOCK B4.
+
+SELECTION-SCREEN BEGIN OF BLOCK B5 WITH FRAME TITLE TEXT-TF5.
+PARAMETERS:  P_GUI    RADIOBUTTON GROUP R02 DEFAULT 'X' , "GUI, Front End
+             P_SERVER RADIOBUTTON GROUP R02. "Batch, Server Side
+PARAMETERS: P_TEST AS CHECKBOX.
+SELECTION-SCREEN END OF BLOCK B5.
+
+
+
+INITIALIZATION.
+
+
+
+********   select output folder and template files **********
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR P_OUTPUT.
+  DATA: LV_OUTPUT TYPE STRING.
+  CALL METHOD CL_GUI_FRONTEND_SERVICES=>DIRECTORY_BROWSE
+    EXPORTING
+      WINDOW_TITLE         = 'Please select export folder...'
+*     INITIAL_FOLDER       =
+    CHANGING
+      SELECTED_FOLDER      = LV_OUTPUT
+    EXCEPTIONS
+      CNTL_ERROR           = 1
+      ERROR_NO_GUI         = 2
+      NOT_SUPPORTED_BY_GUI = 3
+      OTHERS               = 4.
+  IF SY-SUBRC <> 0.
+    WRITE:/ 'Failed to obtain export folder. Error Code:', SY-SUBRC.
+    EXIT.
+  ELSE.
+    P_OUTPUT = LV_OUTPUT.
+  ENDIF.
+
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR P_HEADER.
+  PERFORM BROWSE_TEMPLATEFILEPATH
+              USING
+                 G_FILEEXTENSION
+              CHANGING
+                 P_HEADER
+                 G_FILENAME_HEADER.
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR P_LINES.
+  PERFORM BROWSE_TEMPLATEFILEPATH
+              USING
+                 G_FILEEXTENSION
+              CHANGING
+               P_LINES
+               G_FILENAME_LINES.
+
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR P_LOCS.
+  PERFORM BROWSE_TEMPLATEFILEPATH
+                USING
+                 G_FILEEXTENSION
+            CHANGING
+               P_LOCS
+               G_FILENAME_LINE_LOCATIONS.
+
+START-OF-SELECTION.
+
+END-OF-SELECTION.
+
+
+*************************************** Start to process ******************************************
+************** Check Requirement *************
+  IF P_OUTPUT IS INITIAL.
+    WRITE:/ 'Output Folder Path is required...'.
+    EXIT.
+  ENDIF.
+
+  IF P_HEADER IS INITIAL OR P_LINES IS INITIAL OR P_LOCS IS INITIAL.
+    WRITE:/ 'Template File Path are required fields...'.
+    EXIT.
+  ENDIF.
+
+  PERFORM PREPARE_EXPORT_FILEPATH
+              USING
+                 P_OUTPUT
+                 G_FILENAME_HEADER
+                 G_FILEEXTENSION
+                 P_HEADER
+                 P_GUI
+              CHANGING
+                 G_FILE_HEADER.
+
+  PERFORM PREPARE_EXPORT_FILEPATH
+              USING
+                 P_OUTPUT
+                 G_FILENAME_LINES
+                 G_FILEEXTENSION
+                 P_LINES
+                 P_GUI
+              CHANGING
+                 G_FILE_LINES.
+
+  PERFORM PREPARE_EXPORT_FILEPATH
+            USING
+               P_OUTPUT
+               G_FILENAME_LINE_LOCATIONS
+               G_FILEEXTENSION
+               P_LOCS
+               P_GUI
+            CHANGING
+               G_FILE_LINE_LOCATIONS.
+
+
+*  IF G_FILENAME_HEADER IS INITIAL.
+*    PERFORM GET_EXPORTFILENAME
+*            USING
+*               P_HEADER
+*               G_FILEEXTENSION
+*            CHANGING
+*               G_FILENAME_HEADER.
+*  ENDIF.
+*  IF G_FILENAME_LINES IS INITIAL.
+*    PERFORM GET_EXPORTFILENAME
+*            USING
+*               P_LINES
+*               G_FILEEXTENSION
+*            CHANGING
+*               G_FILENAME_LINES.
+*  ENDIF.
+*  IF G_FILENAME_LINE_LOCATIONS IS INITIAL.
+*    PERFORM GET_EXPORTFILENAME
+*            USING
+*               P_LOCS
+*               G_FILEEXTENSION
+*            CHANGING
+*               G_FILENAME_LINE_LOCATIONS.
+*  ENDIF.
+*  G_FILE_HEADER = P_OUTPUT && G_DELIMITER && G_FILENAME_HEADER.
+*  G_FILE_LINES = P_OUTPUT && G_DELIMITER && G_FILENAME_LINES.
+*  G_FILE_LINE_LOCATIONS = P_OUTPUT && G_DELIMITER && G_FILENAME_LINE_LOCATIONS.
+
+  IF P_TPROW IS INITIAL.
+    G_STARTROW = 1.
+  ELSE.
+    G_STARTROW = P_TPROW.
+  ENDIF.
+
+  IF P_MPROW IS INITIAL.
+    G_MAPROW = 0.
+  ELSE.
+    G_MAPROW = P_MPROW.
+  ENDIF.
+
+  IF P_TPDEF IS INITIAL.
+    G_DEFTROW = 0.
+  ELSE.
+    G_DEFTROW = P_TPDEF.
+  ENDIF.
+
+  G_ENDROW = NMAX( VAL1 = G_MAPROW VAL2 = G_DEFTROW VAL3 = G_STARTROW ).
+
+
+  IF P_TPSCOL IS INITIAL.
+    G_STARTCOL = 1.
+  ELSE.
+    G_STARTCOL = P_TPSCOL.
+  ENDIF.
+
+  IF P_TPCOL IS INITIAL.
+    G_ENDCOL = 100.
+  ELSE.
+    G_ENDCOL = P_TPCOL.
+  ENDIF.
+
+*************** Load Template ****************
+  PERFORM PREPARE_MAPPING
+              USING
+                 P_HEADER
+                 G_STARTCOL
+                 G_STARTROW
+                 G_ENDCOL
+                 G_ENDROW
+                 G_STARTROW
+                 G_MAPROW
+                 G_DEFTROW
+                 P_GUI
+              CHANGING
+                 ITAB_HEADER
+                 HTAB_HEADER.
+
+  PERFORM PREPARE_MAPPING
+              USING
+                 P_LINES
+                 G_STARTCOL
+                 G_STARTROW
+                 G_ENDCOL
+                 G_ENDROW
+                 G_STARTROW
+                 G_MAPROW
+                 G_DEFTROW
+                 P_GUI
+              CHANGING
+                 ITAB_LINES
+                 HTAB_LINES.
+
+  PERFORM PREPARE_MAPPING
+              USING
+                 P_LOCS
+                 G_STARTCOL
+                 G_STARTROW
+                 G_ENDCOL
+                 G_ENDROW
+                 G_STARTROW
+                 G_MAPROW
+                 G_DEFTROW
+                 P_GUI
+              CHANGING
+                 ITAB_LINE_LOCATIONS
+                 HTAB_LINE_LOCATIONS.
+
+**************** Retreiving Data ****************
+  IF P_PIRSTD = 'X'.
+    GT_ESOKZ = '0'. "Standard
+  ELSE.
+    GT_ESOKZ = '3'. "Subcontracting
+  ENDIF.
+
+  REFRESH: GT_A017, GT_HEADER, GT_KONM, GT_LINES, GT_LOCS, GT_PIRHI, GT_MAPS_ORACLE.
+
+  SELECT * FROM ZMAPS_ORACLE INTO TABLE GT_MAPS_ORACLE.
+
+  IF P_BATCH IS NOT INITIAL.
+    ZDATE = SY-DATUM.
+    ZBATCH = P_BATCH && '-' && ZDATE.
+  ENDIF.
+
+  IF P_TEST = 'X'.
+    SELECT * INTO CORRESPONDING FIELDS OF TABLE GT_A017  UP TO 1000 ROWS
+           FROM A017
+          WHERE KAPPL = 'M'
+            AND KSCHL = 'PB00'
+            AND EKORG IN S_EKORG
+            AND WERKS IN S_EKORG
+            AND ESOKZ = GT_ESOKZ
+            AND MATNR IN S_MATNR.
+  ELSE.
+    SELECT * INTO CORRESPONDING FIELDS OF TABLE GT_A017
+       FROM A017
+      WHERE KAPPL = 'M'
+        AND KSCHL = 'PB00'
+        AND EKORG IN S_EKORG
+        AND WERKS IN S_EKORG
+        AND ESOKZ = GT_ESOKZ
+        AND MATNR IN S_MATNR.
+  ENDIF.
+
+  IF GT_A017[] IS NOT INITIAL.
+    SELECT L~LIFNR L~NAME1 L~LAND1 A~MATNR T~MAKTX E~INFNR E~EKORG E~ESOKZ E~WERKS E~EKGRP E~NETPR E~BPRME M~WAERS M~EKORG M~ZTERM
+          INTO CORRESPONDING FIELDS OF TABLE GT_PIRHI
+          FROM EINA AS A
+          INNER JOIN EINE AS E
+            ON E~INFNR = A~INFNR
+          INNER JOIN LFM1 AS M
+            ON M~LIFNR = A~LIFNR AND
+               M~EKORG = E~EKORG
+          INNER JOIN LFA1 AS L
+            ON M~LIFNR = L~LIFNR
+          INNER JOIN MAKT AS T
+            ON T~MATNR = A~MATNR AND
+               T~SPRAS = SY-LANGU
+          FOR ALL ENTRIES IN GT_A017
+          WHERE A~LIFNR = GT_A017-LIFNR
+            AND A~MATNR = GT_A017-MATNR
+            AND E~EKORG = GT_A017-EKORG
+            AND E~WERKS = GT_A017-WERKS
+            AND E~EKORG IN S_EKORG
+            AND E~ESOKZ = GT_ESOKZ.
+
+    SELECT * INTO CORRESPONDING FIELDS OF TABLE GT_KONM
+         FROM KONM
+         FOR ALL ENTRIES IN GT_A017
+         WHERE KONM~KNUMH = GT_A017-KNUMH.
+  ENDIF.
+  SORT GT_PIRHI BY LIFNR MATNR.
+
+  DATA(L_HEADNUM) = P_HSTART.
+  DATA(L_LINENUM) = 1.
+  DATA(L_PRICENUM) = 1.
+  DATA(ZD) = SY-DATUM.
+
+
+
+  LOOP AT GT_PIRHI.
+    AT NEW LIFNR.
+***** HEADER *****
+      CLEAR: G_HEADER.
+
+      L_HEADNUM = L_HEADNUM + 1.
+      L_LINENUM = 1.
+      G_HEADER-HEADNUM =  L_HEADNUM.
+      G_HEADER-ZBATCH = ZBATCH.
+      G_HEADER-ZBUYER = 'Buyer, CohuSVC'.
+      G_HEADER-LIFNR = GT_PIRHI-LIFNR.
+      G_HEADER-NAME1 = GT_PIRHI-NAME1.
+      G_HEADER-LAND1 = GT_PIRHI-LAND1.
+      G_HEADER-WAERS = GT_PIRHI-WAERS.
+      G_HEADER-ZTERM = GT_PIRHI-ZTERM.
+      G_HEADER-EKGRP = '001'."GT_PIRHI-EKGRP.
+      G_HEADER-SSITE = GT_PIRHI-NAME1+0(4) && '-' && GT_PIRHI-LAND1.
+      G_HEADER-STARTD = ZD+0(4) && '/' && ZD+4(2) && '/' && ZD+6(2).
+
+          CLEAR: GT_MAPS_ORACLE.
+    READ TABLE GT_MAPS_ORACLE WITH KEY MAPCODE = '5'
+                                       SRCVAL = GT_PIRHI-ZTERM.
+    IF SY-SUBRC = 0.
+      G_HEADER-ZTERM = GT_MAPS_ORACLE-TARVAL.
+    ENDIF.
+
+      APPEND G_HEADER TO GT_HEADER.
+    ENDAT.
+
+**** LINES ****
+    CLEAR: G_LINES.
+    G_LINES-HEADNUM = G_HEADER-HEADNUM.
+    G_LINES-LINENUM = L_LINENUM.
+    G_LINES-LINEKEY = L_HEADNUM && '-' && L_LINENUM.
+    G_LINES-MAKTX =  GT_PIRHI-MAKTX.
+    G_LINES-MATNR = GT_PIRHI-MATNR.
+    G_LINES-NETPR = GT_PIRHI-NETPR.
+******** MAP UOM
+    CLEAR: GT_MAPS_ORACLE.
+    READ TABLE GT_MAPS_ORACLE WITH KEY MAPCODE = '1'
+                                       SRCVAL = GT_PIRHI-BPRME.
+    IF SY-SUBRC = 0.
+      G_LINES-BPRME = GT_MAPS_ORACLE-TARVAL.
+    ENDIF.
+********* Notes to Supplier, (Purchase order Text)
+    L_TDNAME = GT_PIRHI-INFNR && GT_PIRHI-EKORG && GT_PIRHI-ESOKZ && GT_PIRHI-WERKS.
+    SELECT * FROM STXH into table @GT_STXH  WHERE TDOBJECT = @L_TDOBJECT and tdname = @L_tdname and tdid = @l_tdid and tdspras = @L_LANGUAGE.
+
+    IF SY-SUBRC = 0.
+      CALL FUNCTION 'READ_TEXT'
+        EXPORTING
+*         CLIENT                        = SY-MANDT
+          ID                            = l_tdid
+          LANGUAGE                      = L_LANGUAGE
+          NAME                          = l_tdname
+          OBJECT                        = L_TDOBJECT
+*         ARCHIVE_HANDLE                = 0
+*         LOCAL_CAT                     = ' '
+*       IMPORTING
+*         HEADER                        =
+*         OLD_LINE_COUNTER              =
+        TABLES
+          LINES                         = gt_textlines
+*       EXCEPTIONS
+*         ID                            = 1
+*         LANGUAGE                      = 2
+*         NAME                          = 3
+*         NOT_FOUND                     = 4
+*         OBJECT                        = 5
+*         REFERENCE_CHECK               = 6
+*         WRONG_ACCESS_TO_ARCHIVE       = 7
+*         OTHERS                        = 8
+                .
+      IF SY-SUBRC = 0.
+        LOOP AT GT_TEXTLINES.
+          G_LINES-SUPNOTE = G_LINES-SUPNOTE && ' ' && GT_TEXTLINES-TDLINE.
+        ENDLOOP.
+      ENDIF.
+
+
+    ENDIF.
+
+    APPEND G_LINES TO GT_LINES.
+
+    READ TABLE GT_A017 WITH KEY MATNR = GT_PIRHI-MATNR
+                              LIFNR = GT_PIRHI-LIFNR.
+    IF SY-SUBRC = 0.
+      L_PRICENUM = 1.
+      LOOP AT GT_KONM WHERE KNUMH = GT_A017-KNUMH.
+****** LINE_LOCATIONS ******
+        CLEAR: G_LOCS.
+        G_LOCS-PRICENUM = L_PRICENUM.
+        G_LOCS-LINEKEY = G_LINES-LINEKEY.
+        G_LOCS-LOCKEY = L_HEADNUM && '-' && L_LINENUM && '-' && G_LOCS-PRICENUM.
+
+        G_LOCS-KBETR = GT_KONM-KBETR.
+        G_LOCS-KSTBM = GT_KONM-KSTBM.
+        IF  G_LOCS-KSTBM = 0.
+          G_LOCS-KSTBM = 1.
+        ENDIF.
+        APPEND G_LOCS TO GT_LOCS.
+
+        L_PRICENUM = L_PRICENUM + 1.
+      ENDLOOP.
+    ENDIF.
+    L_LINENUM = L_LINENUM + 1.
+  ENDLOOP.
+
+*********** Output to CSV file *********
+*  PERFORM DOWNLOAD_DATA
+*              USING
+*                 G_FILE_HEADER
+*                 GT_HEADER[]
+*                 ITAB_HEADER[]
+*                 HTAB_HEADER[].
+
+*  PERFORM DOWNLOAD_DATA
+*              USING
+*                 G_FILE_LINES
+*                 GT_LINES[]
+*                 ITAB_LINES[]
+*                 HTAB_LINES[].
+*
+*  PERFORM DOWNLOAD_DATA
+*              USING
+*                 G_FILE_LINE_LOCATIONS
+*                 GT_LOCS[]
+*                 ITAB_LINE_LOCATIONS[]
+*                 HTAB_LINE_LOCATIONS[].
+
+
+  PERFORM EXPORT_DATA
+              USING
+                  G_FILE_HEADER
+                  GT_HEADER[]
+                  ITAB_HEADER[]
+                  HTAB_HEADER[]
+                  P_GUI
+              .
+
+
+  PERFORM EXPORT_DATA
+              USING
+                  G_FILE_LINES
+                  GT_LINES[]
+                  ITAB_LINES[]
+                  HTAB_LINES[]
+                  P_GUI
+                  .
+
+
+  PERFORM EXPORT_DATA
+              USING
+                  G_FILE_LINE_LOCATIONS
+                  GT_LOCS[]
+                  ITAB_LINE_LOCATIONS[]
+                  HTAB_LINE_LOCATIONS[]
+                  P_GUI
+                  .
