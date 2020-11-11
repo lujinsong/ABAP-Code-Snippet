@@ -1,7 +1,6 @@
 *&---------------------------------------------------------------------*
 *&  Include  ZMG_INCLUDE
 *&---------------------------------------------------------------------*
-
 ********** Data Definition Shared************
 TYPES: BEGIN OF TY_MAP,
          INDEX   TYPE I,
@@ -23,21 +22,21 @@ FORM EXPORT_DATA
          PT_MAPS TYPE TY_MAPS
          P_GUI TYPE C.
 
-    IF P_GUI  = 'X'.
-      PERFORM FRONTEND_EXPORT
-                  USING
-                     P_FILE
-                     P_DATA
-                     PT_TEMPLATE
-                     PT_MAPS.
-    ELSE.
-            PERFORM SERVER_EXPORT
-                  USING
-                     P_FILE
-                     P_DATA
-                     PT_TEMPLATE
-                     PT_MAPS.
-    ENDIF.
+  IF P_GUI  = 'X'.
+    PERFORM FRONTEND_EXPORT
+                USING
+                   P_FILE
+                   P_DATA
+                   PT_TEMPLATE
+                   PT_MAPS.
+  ELSE.
+    PERFORM SERVER_EXPORT
+          USING
+             P_FILE
+             P_DATA
+             PT_TEMPLATE
+             PT_MAPS.
+  ENDIF.
 
 
 ENDFORM.
@@ -306,49 +305,87 @@ FORM SERVER_EXPORT
   DATA: FNAME(128) TYPE C.
   DATA: DETAIL(8192),
         L_FIELDVALUE TYPE STRING.
+  DATA: L_MESSAGE   TYPE STRING,
+        O_EXCEPTION TYPE REF TO CX_ROOT.
   FNAME = P_FILE.
-  OPEN DATASET FNAME FOR OUTPUT IN TEXT MODE ENCODING DEFAULT.
-  IF SY-SUBRC = 0.
+  TRY.
+      OPEN DATASET FNAME FOR OUTPUT IN TEXT MODE ENCODING DEFAULT MESSAGE L_MESSAGE.
+      IF SY-SUBRC = 0.
 ************ Write Header *************
-    LOOP AT PT_TEMPLATE INTO DATA(TP).
-      DETAIL = DETAIL && HTAB && TP-COLNAME.
-    ENDLOOP.
-    SHIFT DETAIL BY 1 PLACES LEFT IN CHARACTER MODE.
-    TRANSFER DETAIL TO FNAME.
-    CLEAR: DETAIL.
+        LOOP AT PT_TEMPLATE INTO DATA(TP).
+          DETAIL = DETAIL && HTAB && TP-COLNAME.
+        ENDLOOP.
+        SHIFT DETAIL BY 1 PLACES LEFT IN CHARACTER MODE.
+        TRANSFER DETAIL TO FNAME.
+        CLEAR: DETAIL.
 
 ************ Write Body ***************
-    LOOP AT P_DATA ASSIGNING FIELD-SYMBOL(<FDATA>).
-      LOOP AT PT_TEMPLATE INTO DATA(TBP).
-        L_FIELDVALUE = ''.
-        READ TABLE PT_MAPS ASSIGNING FIELD-SYMBOL(<FMAP>) WITH TABLE KEY COLNAME = TBP-COLNAME.
-        IF SY-SUBRC = 0. "Found mapping
-          IF <FMAP>-MAPNAME IS NOT INITIAL. "Check value in structure <FDATA>
-            DATA(L_FIELDNAME) = <FMAP>-MAPNAME.
-            ASSIGN COMPONENT L_FIELDNAME OF STRUCTURE <FDATA> TO FIELD-SYMBOL(<FVALUE>).
-            IF <FVALUE> IS ASSIGNED.
-              L_FIELDVALUE = <FVALUE>.
-            ELSE.
-              L_FIELDVALUE = 'MISSING MAP FIELD ' && L_FIELDNAME.
+        LOOP AT P_DATA ASSIGNING FIELD-SYMBOL(<FDATA>).
+          LOOP AT PT_TEMPLATE INTO DATA(TBP).
+            L_FIELDVALUE = ''.
+            READ TABLE PT_MAPS ASSIGNING FIELD-SYMBOL(<FMAP>) WITH TABLE KEY COLNAME = TBP-COLNAME.
+            IF SY-SUBRC = 0. "Found mapping
+              IF <FMAP>-MAPNAME IS NOT INITIAL. "Check value in structure <FDATA>
+                DATA(L_FIELDNAME) = <FMAP>-MAPNAME.
+                ASSIGN COMPONENT L_FIELDNAME OF STRUCTURE <FDATA> TO FIELD-SYMBOL(<FVALUE>).
+                IF <FVALUE> IS ASSIGNED.
+                  L_FIELDVALUE = <FVALUE>.
+                ELSE.
+                  L_FIELDVALUE = 'MISSING MAP FIELD ' && L_FIELDNAME.
+                ENDIF.
+                UNASSIGN <FVALUE>.
+              ELSE. " check default value
+                L_FIELDVALUE = <FMAP>-DEFAULT.
+              ENDIF.
             ENDIF.
-            UNASSIGN <FVALUE>.
-          ELSE. " check default value
-            L_FIELDVALUE = <FMAP>-DEFAULT.
-          ENDIF.
-        ENDIF.
-        DETAIL = DETAIL && HTAB && L_FIELDVALUE.
-      ENDLOOP.
+            DETAIL = DETAIL && HTAB && L_FIELDVALUE.
+          ENDLOOP.
 
-      SHIFT DETAIL BY 1 PLACES LEFT IN CHARACTER MODE.
-      TRANSFER DETAIL TO FNAME.
-      CLEAR: DETAIL.
-    ENDLOOP.
+          SHIFT DETAIL BY 1 PLACES LEFT IN CHARACTER MODE.
+          TRANSFER DETAIL TO FNAME.
+          CLEAR: DETAIL.
+        ENDLOOP.
 
-    CLOSE DATASET FNAME.
-    WRITE:/ 'Export to file ', P_FILE.
-  ELSE.
-    WRITE:/ 'Failed to open data set for ', P_FILE.
+
+        WRITE:/ 'Export to file ', P_FILE.
+      ELSE.
+        WRITE:/ 'Failed to open data set for ', P_FILE.
+      ENDIF.
+      CLOSE DATASET FNAME.
+    CATCH CX_ROOT INTO O_EXCEPTION.
+      CALL METHOD O_EXCEPTION->IF_MESSAGE~GET_TEXT
+        RECEIVING
+          RESULT = L_MESSAGE.  " ---
+  ENDTRY.
+  IF L_MESSAGE IS NOT INITIAL OR L_MESSAGE <> ''.
+    WRITE:/ 'Error message to write to file ', P_FILE, ' : ', L_MESSAGE.
   ENDIF.
+ENDFORM.
+
+FORM SERVER_DOWNLOAD_FILE
+          USING
+         P_FILE TYPE RLGRAP-FILENAME
+         P_DATA TYPE ANY TABLE.
+  DATA: FNAME(128) TYPE C.
+  DATA: DETAIL(8192),
+        L_FIELDVALUE TYPE STRING.
+  DATA: L_MESSAGE   TYPE STRING,
+        O_EXCEPTION TYPE REF TO CX_ROOT.
+  FNAME = P_FILE.
+  TRY.
+      OPEN DATASET FNAME FOR OUTPUT IN TEXT MODE ENCODING DEFAULT MESSAGE L_MESSAGE.
+
+
+
+      CATCH CX_ROOT INTO O_EXCEPTION.
+        CALL METHOD O_EXCEPTION->IF_MESSAGE~GET_TEXT
+          RECEIVING
+            RESULT = L_MESSAGE.  " ---
+  ENDTRY.
+  IF L_MESSAGE IS NOT INITIAL OR L_MESSAGE <> ''.
+    WRITE:/ 'Error message raised when writing to file ', P_FILE, ' : ', L_MESSAGE.
+  ENDIF.
+
 
 ENDFORM.
 
@@ -436,21 +473,21 @@ FORM SERVER_PREPARE_MAPPING
 *         replace all occurrences of cl_abap_char_utilities=>FORM_FEED in lv_string with ''.
           DATA(LEN) = STRLEN( LV_STRING ).
           IF LEN > 0.
-          LEN = LEN - 1.
-          LV_STRING = LV_STRING+0(LEN).
-          SPLIT LV_STRING AT ',' INTO TABLE LT_SPLIT.
-          LV_COL = 0.
-          LOOP AT LT_SPLIT INTO DATA(VALUE).
-            CLEAR: ITAB.
-            LV_COL  = LV_COL + 1.
-            IF LV_COL > P_ENDCOL.
-              EXIT.
-            ENDIF.
-            ITAB-ROW = LV_ROW.
-            ITAB-COL = LV_COL.
-            ITAB-VALUE = VALUE.
-            APPEND ITAB TO ITAB.
-          ENDLOOP.
+            LEN = LEN - 1.
+            LV_STRING = LV_STRING+0(LEN).
+            SPLIT LV_STRING AT ',' INTO TABLE LT_SPLIT.
+            LV_COL = 0.
+            LOOP AT LT_SPLIT INTO DATA(VALUE).
+              CLEAR: ITAB.
+              LV_COL  = LV_COL + 1.
+              IF LV_COL > P_ENDCOL.
+                EXIT.
+              ENDIF.
+              ITAB-ROW = LV_ROW.
+              ITAB-COL = LV_COL.
+              ITAB-VALUE = VALUE.
+              APPEND ITAB TO ITAB.
+            ENDLOOP.
           ENDIF.
         CATCH CX_SY_CONVERSION_CODEPAGE.
           CONTINUE.
@@ -618,7 +655,7 @@ FORM PREPARE_EXPORT_FILEPATH
   ENDIF.
 
 ******** get the export file name from template name
-  IF L_EXPORTFILENAME is INITIAL or L_EXPORTFILENAME = ''.
+  IF L_EXPORTFILENAME IS INITIAL OR L_EXPORTFILENAME = ''.
     PERFORM GET_EXPORTFILENAME
                 USING
                    P_TEMPLATEFILEPATH
@@ -659,17 +696,142 @@ FORM GET_EXPORTFILENAME
 **     OTHERS        = 2
 *    .
 
-  IF P_EXPORTFILENAME is INITIAL or P_EXPORTFILENAME = ''.
-    split P_FILEPATH at P_FILEPATHSEPARATOR into table data(itab).
-    if itab[] is not INITIAL.
-      data(count) = lines( itab ).
-      if count > 0.
-        P_EXPORTFILENAME = itab[ count ].
-      endif.
-    endif.
+  IF P_EXPORTFILENAME IS INITIAL OR P_EXPORTFILENAME = ''.
+    SPLIT P_FILEPATH AT P_FILEPATHSEPARATOR INTO TABLE DATA(ITAB).
+    IF ITAB[] IS NOT INITIAL.
+      DATA(COUNT) = LINES( ITAB ).
+      IF COUNT > 0.
+        P_EXPORTFILENAME = ITAB[ COUNT ].
+      ENDIF.
+    ENDIF.
   ENDIF.
 
 
   SPLIT P_EXPORTFILENAME AT '.' INTO DATA(FNAME) DATA(EXT).
   P_EXPORTFILENAME = FNAME && '.' && P_EXTENSION.
 ENDFORM.
+
+
+****************** Class Version ******************
+CLASS ZCL_MG_TEMPLATE DEFINITION.
+  PUBLIC SECTION.
+    METHODS: CONSTRUCTOR,
+      SET_TEMPLATE_INPUT_PARAMETERS IMPORTING
+                                      IN_COLNAMEROW      TYPE I
+                                      IN_MAPROW          TYPE I
+                                      IN_DEFAULTVALUEROW TYPE I
+                                      IN_STARTCOL        TYPE I
+                                      IN_COLCOUNT        TYPE I,
+      EXPORT_DATA IMPORTING
+                    IN_ISGUI                TYPE C
+                    IN_OUTPUT_PATH          TYPE RLGRAP-FILENAME
+                    IN_OUTPUT_FILENAME      TYPE RLGRAP-FILENAME OPTIONAL
+                    IN_OUTPUT_FILEEXTENSION TYPE STRING DEFAULT 'txt'
+                    IN_TEMPLATE_FILE        TYPE RLGRAP-FILENAME
+                    INT_DATA                TYPE STANDARD TABLE.
+
+
+
+  PROTECTED SECTION.
+    DATA: STARTCOL        TYPE I,
+          STARTROW        TYPE I,
+          ENDCOL          TYPE I,
+          ENDROW          TYPE I,
+          COLNAMEROW      TYPE I,
+          MAPROW          TYPE I,
+          DEFAULTVALUEROW TYPE I.
+
+
+
+ENDCLASS. " ZCL_MG_TEMPLATE defintion
+
+CLASS ZCL_MG_TEMPLATE IMPLEMENTATION.
+  METHOD  CONSTRUCTOR.
+    STARTCOL = 1.
+    STARTROW = 1.
+    ENDCOL = 200.
+    ENDROW = 3.
+    COLNAMEROW = 1.
+    MAPROW = 2.
+    DEFAULTVALUEROW = 3.
+  ENDMETHOD.
+
+  METHOD SET_TEMPLATE_INPUT_PARAMETERS.
+    IF IN_COLNAMEROW IS NOT INITIAL.
+      STARTROW = IN_COLNAMEROW.
+    ENDIF.
+
+    IF IN_MAPROW IS NOT INITIAL.
+      MAPROW = IN_MAPROW.
+    ENDIF.
+
+    IF IN_DEFAULTVALUEROW IS NOT INITIAL.
+      DEFAULTVALUEROW = IN_DEFAULTVALUEROW.
+    ENDIF.
+
+    ENDROW = NMAX( VAL1 = MAPROW VAL2 = DEFAULTVALUEROW VAL3 = STARTROW ).
+
+    IF IN_STARTCOL IS NOT INITIAL.
+      STARTCOL = IN_STARTCOL.
+    ENDIF.
+
+    IF IN_COLCOUNT IS NOT INITIAL.
+      ENDCOL = STARTCOL + IN_COLCOUNT - 1.
+    ENDIF.
+
+  ENDMETHOD.
+
+
+  METHOD EXPORT_DATA.
+    DATA: L_OUTPUT_FILE TYPE RLGRAP-FILENAME,
+          ITAB_TEMPLATE TYPE TY_TEMPLATE,
+          HTAB_TEMPLATE TYPE TY_MAPS.
+
+    IF IN_OUTPUT_PATH IS INITIAL.
+      WRITE:/ 'Output Folder Path is required...'.
+      EXIT.
+    ENDIF.
+
+    IF IN_TEMPLATE_FILE IS INITIAL.
+      WRITE:/ 'Template File Path are required fields...'.
+      EXIT.
+    ENDIF.
+
+*********** prepare export file path ************
+    PERFORM PREPARE_EXPORT_FILEPATH
+           USING
+               IN_OUTPUT_PATH
+               IN_OUTPUT_FILENAME
+               IN_OUTPUT_FILEEXTENSION
+               IN_TEMPLATE_FILE
+               IN_ISGUI
+           CHANGING
+               L_OUTPUT_FILE.
+
+*********** load template file ************
+    PERFORM PREPARE_MAPPING
+           USING
+               IN_TEMPLATE_FILE
+               STARTCOL
+               STARTROW
+               ENDCOL
+               ENDROW
+               COLNAMEROW
+               MAPROW
+               DEFAULTVALUEROW
+               IN_ISGUI
+            CHANGING
+              ITAB_TEMPLATE
+              HTAB_TEMPLATE.
+
+************** Perform output **********
+    PERFORM EXPORT_DATA
+          USING
+              L_OUTPUT_FILE
+              INT_DATA[]
+              ITAB_TEMPLATE[]
+              HTAB_TEMPLATE[]
+              IN_ISGUI.
+
+  ENDMETHOD.
+ENDCLASS.
