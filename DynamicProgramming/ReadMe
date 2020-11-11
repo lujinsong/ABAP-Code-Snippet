@@ -4,7 +4,7 @@ The third row contains the default value if no mapping is specified, usually is 
 
 The output file in the server mode is a tab deliminator text file. You may open it in excel to do the conversion. If no date format conversion, in the last step, please choose text.
 
-The following are the referenced links on dynamic programming.
+The following are the referenced links on ABAP dynamic programming.
 https://itpsap.com/abap-dynamic-programming-part-1/
 http://zevolving.com/2013/07/dynamic-itab-migration-from-create_dynamic_table-to-rtts/
 https://stackoverflow.com/questions/39427537/looping-through-a-dynamic-internal-table-in-abap-unkown-attributes/39568245
